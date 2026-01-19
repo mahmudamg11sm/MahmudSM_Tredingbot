@@ -5,12 +5,12 @@ import requests
 from flask import Flask
 from threading import Thread
 
-# ================== WEB SERVER (FOR RENDER) ==================
+# ================== WEB SERVER ==================
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Crypto Bot is running!"
+    return "Crypto Bot v2 is running!"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -40,91 +40,95 @@ def main_menu():
 
 # ================== HELPERS ==================
 def get_trending():
-    url = f"{BASE_URL}/search/trending"
-    r = requests.get(url, timeout=10).json()
-    coins = r.get("coins", [])
-    return coins
+    r = requests.get(f"{BASE_URL}/search/trending", timeout=10).json()
+    return r.get("coins", [])
 
 def get_top():
-    url = f"{BASE_URL}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=10&page=1"
-    r = requests.get(url, timeout=10).json()
+    r = requests.get(f"{BASE_URL}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=10&page=1", timeout=10).json()
     return r
 
 def get_price(coin_id):
-    url = f"{BASE_URL}/simple/price?ids={coin_id}&vs_currencies=usd"
-    r = requests.get(url, timeout=10).json()
+    r = requests.get(f"{BASE_URL}/simple/price?ids={coin_id}&vs_currencies=usd", timeout=10).json()
     return r
 
 def search_coin(query):
-    url = f"{BASE_URL}/search?query={query}"
-    r = requests.get(url, timeout=10).json()
+    r = requests.get(f"{BASE_URL}/search?query={query}", timeout=10).json()
     return r.get("coins", [])
 
-# ================== COMMANDS ==================
+# ================== START ==================
 @bot.message_handler(commands=["start"])
 def start(msg):
     bot.send_message(
         msg.chat.id,
-        "🤖 <b>Welcome to Crypto Trending Bot!</b>\n\n"
-        "You can:\n"
-        "📈 See trending coins\n"
-        "🏆 See top coins\n"
-        "💰 Check price\n"
-        "🔎 Search any coin",
+        "🤖 <b>Welcome to Crypto Trending Bot v2!</b>\n\n"
+        "Use the buttons below to get info about coins.",
         reply_markup=main_menu()
     )
 
-# ================== MAIN HANDLER ==================
+# ================== INLINE BUTTON CALLBACK ==================
+@bot.callback_query_handler(func=lambda call: True)
+def callback_inline(call):
+    coin_id = call.data
+    price_data = get_price(coin_id)
+    if coin_id in price_data:
+        price = price_data[coin_id]["usd"]
+        bot.answer_callback_query(call.id, f"{coin_id.upper()} price: ${price}")
+        bot.send_message(call.message.chat.id, f"💰 <b>{coin_id.upper()}</b> price: <b>${price}</b>")
+    else:
+        bot.answer_callback_query(call.id, "Coin not found.")
+
+# ================== USER STATE ==================
 user_state = {}
 
+# ================== MAIN HANDLER ==================
 @bot.message_handler(func=lambda m: True)
 def handle(msg):
     chat_id = msg.chat.id
-    text = msg.text.strip()
+    text = msg.text.strip().lower()
 
     # ===== Buttons =====
-    if text == "📈 Trending":
+    if text == "📈 trending":
         coins = get_trending()
         if not coins:
             bot.send_message(chat_id, "Failed to get trending coins.")
             return
-
+        markup = types.InlineKeyboardMarkup()
         message = "🔥 <b>Trending Coins:</b>\n\n"
-        for i, item in enumerate(coins[:10], 1):
+        for item in coins:
             coin = item["item"]
-            message += f"{i}. {coin['name']} ({coin['symbol'].upper()})\n"
-
-        bot.send_message(chat_id, message)
+            message += f"- {coin['name']} ({coin['symbol'].upper()})\n"
+            markup.add(types.InlineKeyboardButton(coin['name'], callback_data=coin['id']))
+        bot.send_message(chat_id, message, reply_markup=markup)
         return
 
-    if text == "🏆 Top Coins":
+    if text == "🏆 top coins":
         coins = get_top()
         if not coins:
             bot.send_message(chat_id, "Failed to get top coins.")
             return
-
-        message = "🏆 <b>Top 10 Coins by Market Cap:</b>\n\n"
-        for i, coin in enumerate(coins, 1):
-            message += f"{i}. {coin['name']} (${coin['current_price']})\n"
-
-        bot.send_message(chat_id, message)
+        markup = types.InlineKeyboardMarkup()
+        message = "🏆 <b>Top 10 Coins:</b>\n\n"
+        for coin in coins:
+            message += f"- {coin['name']} (${coin['current_price']})\n"
+            markup.add(types.InlineKeyboardButton(coin['name'], callback_data=coin['id']))
+        bot.send_message(chat_id, message, reply_markup=markup)
         return
 
-    if text == "💰 Price":
-        bot.send_message(chat_id, "Send coin id (example: bitcoin, ethereum, solana)")
+    if text == "💰 price":
+        bot.send_message(chat_id, "Send coin name or symbol (e.g., bitcoin, solana, eth)")
         user_state[chat_id] = "price"
         return
 
-    if text == "🔎 Search":
-        bot.send_message(chat_id, "Send coin name to search (example: doge, pepe, shiba)")
+    if text == "🔎 search":
+        bot.send_message(chat_id, "Send coin name to search")
         user_state[chat_id] = "search"
         return
 
-    if text == "ℹ️ About":
+    if text == "ℹ️ about":
         bot.send_message(
             chat_id,
-            "ℹ️ <b>Crypto Trending Bot</b>\n"
-            "Data source: CoinGecko (free API)\n"
+            "ℹ️ <b>Crypto Trending Bot v2</b>\n"
+            "Source: CoinGecko API\n"
             "Features:\n"
             "- Trending coins\n"
             "- Top coins\n"
@@ -136,16 +140,15 @@ def handle(msg):
     # ===== Waiting for user input =====
     if chat_id in user_state:
         mode = user_state[chat_id]
-
         if mode == "price":
-            coin_id = text.lower().replace(" ", "-")
-            data = get_price(coin_id)
-            if coin_id not in data:
-                bot.send_message(chat_id, "❌ Coin not found. Try: bitcoin, ethereum, solana")
+            coin_query = text.replace(" ", "-")
+            data = get_price(coin_query)
+            if coin_query in data:
+                price = data[coin_query]["usd"]
+                bot.send_message(chat_id, f"💰 <b>{coin_query.upper()}</b> price: <b>${price}</b>")
             else:
-                price = data[coin_id]["usd"]
-                bot.send_message(chat_id, f"💰 <b>{coin_id.upper()}</b> price: <b>${price}</b>")
-            user_state.pop(chat_id, None)
+                bot.send_message(chat_id, "❌ Coin not found. Try: bitcoin, ethereum, solana")
+            user_state.pop(chat_id)
             return
 
         if mode == "search":
@@ -157,12 +160,12 @@ def handle(msg):
                 for coin in results[:10]:
                     message += f"- {coin['name']} ({coin['symbol'].upper()}) | id: <code>{coin['id']}</code>\n"
                 bot.send_message(chat_id, message)
-            user_state.pop(chat_id, None)
+            user_state.pop(chat_id)
             return
 
     # ===== Default =====
     bot.send_message(chat_id, "Please use the menu buttons.", reply_markup=main_menu())
 
-# ================== RUN ==================
-print("Crypto Bot is running...")
+# ================== RUN BOT ==================
+print("Crypto Bot v2 is running...")
 bot.infinity_polling(skip_pending=True)
