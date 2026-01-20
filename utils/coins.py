@@ -11,10 +11,14 @@ def fetch_top_coins(limit=10):
             "sparkline": "false"
         }
 
-        r = requests.get(url, params=params, timeout=20)
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
+
+        r = requests.get(url, params=params, headers=headers, timeout=20)
 
         if r.status_code != 200:
-            print("CoinGecko error:", r.status_code, r.text)
+            print("CoinGecko bad status:", r.status_code, r.text)
             return []
 
         data = r.json()
@@ -23,7 +27,7 @@ def fetch_top_coins(limit=10):
         for c in data:
             coins.append({
                 "name": c.get("name"),
-                "symbol": c.get("symbol", "").upper(),
+                "symbol": c.get("symbol"),
                 "price": c.get("current_price"),
                 "change": c.get("price_change_percentage_24h")
             })
