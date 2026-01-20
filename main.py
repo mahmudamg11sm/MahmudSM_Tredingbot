@@ -1,17 +1,16 @@
 import telebot
 from telebot import types
-import os
 import requests
+import os
 from flask import Flask
 from threading import Thread
-import time
 
-# ================= WEB SERVER FOR RENDER =================
+# ================= FLASK FOR RENDER =================
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Crypto Bot v2 is running!"
+    return "Crypto Bot is running!"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -19,159 +18,132 @@ def run_web():
 
 Thread(target=run_web).start()
 
-# ================= KEEP ALIVE =================
-def keep_alive():
-    while True:
-        try:
-            url = os.environ.get("RENDER_EXTERNAL_URL") or "https://mahmudsm-tredingbot.onrender.com"
-            requests.get(url)
-        except:
-            pass
-        time.sleep(300)
-
-Thread(target=keep_alive).start()
-
-# ================= BOT CONFIG =================
+# ================= BOT =================
 TOKEN = os.environ.get("TOKEN")
 if not TOKEN:
-    raise Exception("BOT TOKEN not found!")
+    raise Exception("TOKEN not found in environment variables")
 
-ADMIN_ID = 6648308251
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
-# ================= MENU =================
+print("Crypto Bot v2 is running...")
+
+# ================= MENUS =================
 def main_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("📈 Trending", "🏆 Top Coins")
-    markup.add("💰 Price", "🔍 Search")
-    markup.add("ℹ️ About")
-    return markup
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("🏆 Top Coins", "🔥 Trending")
+    kb.add("💰 Price", "🔍 Search")
+    kb.add("ℹ️ About")
+    return kb
 
-# ================= API HELPERS =================
-COINGECKO_API = "https://api.coingecko.com/api/v3"
-
-def get_top(limit=10):
-    try:
-        r = requests.get(f"{COINGECKO_API}/coins/markets", params={
-            "vs_currency": "usd",
-            "order": "market_cap_desc",
-            "per_page": limit,
-            "page": 1,
-        })
-        return r.json()
-    except:
-        return []
-
-def get_trending():
-    try:
-        r = requests.get(f"{COINGECKO_API}/search/trending")
-        return r.json().get("coins", [])
-    except:
-        return []
-
-def get_price(coin_id):
-    try:
-        r = requests.get(f"{COINGECKO_API}/simple/price", params={
-            "ids": coin_id,
-            "vs_currencies": "usd"
-        })
-        return r.json().get(coin_id, {}).get("usd")
-    except:
-        return None
-
-# ================= HANDLERS =================
+# ================= START =================
 @bot.message_handler(commands=["start"])
 def start(msg):
-    chat_id = msg.chat.id
-    bot.send_message(chat_id, "Welcome to Crypto Bot v2!", reply_markup=main_menu())
+    bot.send_message(msg.chat.id, "👋 Welcome to Crypto Bot!\n\nChoose an option:", reply_markup=main_menu())
 
+# ================= COINGECKO =================
+def get_top_coins():
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {
+        "vs_currency": "usd",
+        "order": "market_cap_desc",
+        "per_page": 10,
+        "page": 1
+    }
+    r = requests.get(url, params=params, timeout=20)
+    return r.json()
+
+def get_trending():
+    url = "https://api.coingecko.com/api/v3/search/trending"
+    r = requests.get(url, timeout=20)
+    return r.json()
+
+def get_price(coin_id):
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd"
+    r = requests.get(url, timeout=20)
+    return r.json()
+
+# ================= HANDLERS =================
 @bot.message_handler(func=lambda m: True)
 def handle(msg):
-    chat_id = msg.chat.id
     text = msg.text.strip()
-
-    if text == "ℹ️ About":
-        bot.send_message(chat_id, "Crypto Bot v2\nTop Coins, Trending, Price, Search.\nOwner: @MHSM5")
-        return
+    chat_id = msg.chat.id
 
     if text == "🏆 Top Coins":
-        coins = get_top()
-        if not coins:
-            bot.send_message(chat_id, "Failed to fetch top coins.")
+        data = get_top_coins()
+        if not isinstance(data, list):
+            bot.send_message(chat_id, "❌ Failed to load top coins.")
             return
-        markup = types.InlineKeyboardMarkup()
-        message = "<b>Top 10 Coins:</b>\n\n"
-        for coin in coins:
+
+        kb = types.InlineKeyboardMarkup()
+        message = "🏆 <b>Top 10 Coins</b>\n\n"
+
+        for coin in data:
+            name = coin.get("name")
+            price = coin.get("current_price")
             coin_id = coin.get("id")
-            coin_name = coin.get("name")
-            coin_price = coin.get("current_price")
-            if coin_id and coin_name and coin_price is not None:
-                message += f"- {coin_name} (${coin_price})\n"
-                markup.add(types.InlineKeyboardButton(coin_name, callback_data=coin_id))
-        bot.send_message(chat_id, message, reply_markup=markup)
+
+            message += f"• {name} - ${price}\n"
+            kb.add(types.InlineKeyboardButton(text=name, callback_data=f"price:{coin_id}"))
+
+        bot.send_message(chat_id, message, reply_markup=kb)
         return
 
-    if text == "📈 Trending":
-        trending = get_trending()
-        if not trending:
-            bot.send_message(chat_id, "Failed to fetch trending coins.")
-            return
-        markup = types.InlineKeyboardMarkup()
-        message = "<b>Trending Coins:</b>\n\n"
-        for t in trending:
-            item = t.get("item", {})
-            coin_id = item.get("id")
-            coin_name = item.get("name")
-            coin_symbol = item.get("symbol")
-            if coin_id and coin_name:
-                message += f"- {coin_name} ({coin_symbol})\n"
-                markup.add(types.InlineKeyboardButton(coin_name, callback_data=coin_id))
-        bot.send_message(chat_id, message, reply_markup=markup)
+    if text == "🔥 Trending":
+        data = get_trending()
+        coins = data.get("coins", [])
+
+        kb = types.InlineKeyboardMarkup()
+        message = "🔥 <b>Trending Coins</b>\n\n"
+
+        for item in coins[:10]:
+            coin = item["item"]
+            name = coin["name"]
+            coin_id = coin["id"]
+            message += f"• {name}\n"
+            kb.add(types.InlineKeyboardButton(text=name, callback_data=f"price:{coin_id}"))
+
+        bot.send_message(chat_id, message, reply_markup=kb)
         return
 
     if text == "💰 Price":
-        bot.send_message(chat_id, "Send coin id or symbol (example: bitcoin, solana, eth)")
+        bot.send_message(chat_id, "Send me the coin name. Example: bitcoin")
         bot.register_next_step_handler(msg, price_step)
         return
 
     if text == "🔍 Search":
-        bot.send_message(chat_id, "Send coin id or name to search")
-        bot.register_next_step_handler(msg, search_step)
+        bot.send_message(chat_id, "Send me the coin name to search:")
+        bot.register_next_step_handler(msg, price_step)
         return
 
-# ================= CALLBACKS =================
+    if text == "ℹ️ About":
+        bot.send_message(chat_id, "🤖 Crypto Bot\nData from CoinGecko\nBy Mahmud")
+        return
+
+    bot.send_message(chat_id, "Use the menu buttons.", reply_markup=main_menu())
+
+# ================= CALLBACK =================
 @bot.callback_query_handler(func=lambda call: True)
 def callback(call):
-    coin_id = call.data
-    price = get_price(coin_id)
-    if price is None:
-        bot.answer_callback_query(call.id, f"Price not found for {coin_id}")
-    else:
-        bot.answer_callback_query(call.id, f"${price} USD", show_alert=True)
+    if call.data.startswith("price:"):
+        coin_id = call.data.split(":", 1)[1]
+        data = get_price(coin_id)
 
-# ================= NEXT STEP HANDLERS =================
-def price_step(msg):
-    coin_id = msg.text.strip().lower()
-    price = get_price(coin_id)
-    if price is None:
-        bot.send_message(msg.chat.id, f"Coin not found: {coin_id}")
-    else:
-        bot.send_message(msg.chat.id, f"{coin_id} price: ${price} USD")
-
-def search_step(msg):
-    coin_id = msg.text.strip().lower()
-    try:
-        r = requests.get(f"{COINGECKO_API}/coins/{coin_id}")
-        data = r.json()
-        name = data.get("name")
-        price = data.get("market_data", {}).get("current_price", {}).get("usd")
-        if not name:
-            bot.send_message(msg.chat.id, f"Coin not found: {coin_id}")
+        if coin_id in data:
+            price = data[coin_id]["usd"]
+            bot.send_message(call.message.chat.id, f"💰 <b>{coin_id.upper()}</b>\nPrice: ${price}")
         else:
-            bot.send_message(msg.chat.id, f"{name}: ${price} USD")
-    except:
-        bot.send_message(msg.chat.id, f"Error fetching coin: {coin_id}")
+            bot.send_message(call.message.chat.id, "❌ Price not found.")
 
-# ================= RUN BOT =================
-print("Crypto Bot v2 is running...")
+# ================= PRICE STEP =================
+def price_step(msg):
+    coin = msg.text.strip().lower()
+    data = get_price(coin)
+
+    if coin in data:
+        price = data[coin]["usd"]
+        bot.send_message(msg.chat.id, f"💰 <b>{coin.upper()}</b>\nPrice: ${price}")
+    else:
+        bot.send_message(msg.chat.id, "❌ Coin not found.")
+
+# ================= RUN =================
 bot.infinity_polling(skip_pending=True)
