@@ -18,20 +18,25 @@ def fetch_top_coins(limit=10):
 
         data = r.json()
 
+        if "Data" not in data:
+            print("Bad response:", data)
+            return []
+
         coins = []
 
         for c in data["Data"]:
-            coin_info = c["CoinInfo"]
+            info = c["CoinInfo"]
             raw = c["RAW"]["USD"]
 
             coins.append({
-                "name": coin_info["Name"],
-                "symbol": coin_info["Name"],
+                "name": info["Name"],
+                "symbol": info["FullName"],
                 "price": raw["PRICE"],
                 "change": raw["CHANGEPCT24HOUR"]
             })
 
         print("Loaded coins:", coins[:2])
+
         return coins
 
     except Exception as e:
