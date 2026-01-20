@@ -11,20 +11,25 @@ def fetch_top_coins(limit=10):
             "sparkline": "false"
         }
 
-        r = requests.get(url, params=params, timeout=10)
-        data = r.json()   # 👈 Wannan shi ne json()
+        r = requests.get(url, params=params, timeout=20)
+
+        if r.status_code != 200:
+            print("CoinGecko error:", r.status_code, r.text)
+            return []
+
+        data = r.json()
 
         coins = []
-        for coin in data:
+        for c in data:
             coins.append({
-                "name": coin["name"],
-                "symbol": coin["symbol"].upper(),
-                "price": coin["current_price"],
-                "change": coin["price_change_percentage_24h"]
+                "name": c.get("name"),
+                "symbol": c.get("symbol", "").upper(),
+                "price": c.get("current_price"),
+                "change": c.get("price_change_percentage_24h")
             })
 
         return coins
 
     except Exception as e:
-        print("CoinGecko error:", e)
+        print("ERROR in fetch_top_coins:", e)
         return []
