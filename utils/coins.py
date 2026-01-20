@@ -17,8 +17,10 @@ def fetch_top_coins(limit=10):
 
         r = requests.get(url, params=params, headers=headers, timeout=20)
 
+        print("CoinGecko status:", r.status_code)
+
         if r.status_code != 200:
-            print("CoinGecko bad status:", r.status_code, r.text)
+            print("CoinGecko error:", r.text)
             return []
 
         data = r.json()
@@ -31,6 +33,8 @@ def fetch_top_coins(limit=10):
                 "price": c.get("current_price"),
                 "change": c.get("price_change_percentage_24h")
             })
+
+        print("Loaded coins:", coins[:2])  # debug
 
         return coins
 
