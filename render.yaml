@@ -1,7 +1,6 @@
 services:
   - type: web
-    name: mahmud-crypto-bot
+    name: MahmudCryptoBot
     env: python
-    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
