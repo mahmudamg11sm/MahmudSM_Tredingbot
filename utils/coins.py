@@ -2,40 +2,36 @@ import requests
 
 def fetch_top_coins(limit=10):
     try:
-        url = "https://api.coingecko.com/api/v3/coins/markets"
+        url = "https://min-api.cryptocompare.com/data/top/mktcapfull"
         params = {
-            "vs_currency": "usd",
-            "order": "market_cap_desc",
-            "per_page": limit,
-            "page": 1,
-            "sparkline": "false"
+            "limit": limit,
+            "tsym": "USD"
         }
 
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
+        r = requests.get(url, params=params, timeout=20)
 
-        r = requests.get(url, params=params, headers=headers, timeout=20)
-
-        print("CoinGecko status:", r.status_code)
+        print("CryptoCompare status:", r.status_code)
 
         if r.status_code != 200:
-            print("CoinGecko error:", r.text)
+            print("CryptoCompare error:", r.text)
             return []
 
         data = r.json()
 
         coins = []
-        for c in data:
+
+        for c in data["Data"]:
+            coin_info = c["CoinInfo"]
+            raw = c["RAW"]["USD"]
+
             coins.append({
-                "name": c.get("name"),
-                "symbol": c.get("symbol"),
-                "price": c.get("current_price"),
-                "change": c.get("price_change_percentage_24h")
+                "name": coin_info["Name"],
+                "symbol": coin_info["Name"],
+                "price": raw["PRICE"],
+                "change": raw["CHANGEPCT24HOUR"]
             })
 
-        print("Loaded coins:", coins[:2])  # debug
-
+        print("Loaded coins:", coins[:2])
         return coins
 
     except Exception as e:
