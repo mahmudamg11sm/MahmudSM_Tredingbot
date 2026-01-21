@@ -18,7 +18,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot is running!"
+    return "🤖 Bot is running!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -27,7 +27,6 @@ def run_flask():
 Thread(target=run_flask).start()
 
 # ================== BOT COMMANDS ==================
-
 @bot.message_handler(commands=["start"])
 def start(message):
     chat_id = message.chat.id
@@ -44,7 +43,6 @@ def start(message):
     bot.send_message(chat_id, text, reply_markup=markup)
 
 # ================== CALLBACK HANDLER ==================
-
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     chat_id = call.message.chat.id
@@ -75,6 +73,5 @@ def callback_handler(call):
             print("ERROR:", e)
 
 # ================== START BOT ==================
-
 print("🤖 Bot is running...")
 bot.infinity_polling(skip_pending=True)
