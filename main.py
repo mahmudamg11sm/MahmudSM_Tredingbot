@@ -1,20 +1,24 @@
 import os
+import telebot
 from flask import Flask
 from threading import Thread
-import telebot
 
 from utils.coins import fetch_top_coins
 
 # ================== CONFIG ==================
-TOKEN = os.getenv("BOT_TOKEN")
-bot = telebot.TeleBot(TOKEN)
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# ================== FLASK ==================
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN not found in environment variables!")
+
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# ================== FLASK KEEP ALIVE ==================
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Mahmud Crypto Bot is running!"
+    return "Bot is running!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -22,45 +26,55 @@ def run_flask():
 
 Thread(target=run_flask).start()
 
-# ================== TELEGRAM BOT ==================
+# ================== BOT COMMANDS ==================
 
 @bot.message_handler(commands=["start"])
 def start(message):
-    text = "👋 Barka da zuwa *Mahmud Crypto Bot*\n\nZaɓi abinda kake so 👇"
+    chat_id = message.chat.id
+
+    text = (
+        "👋 Barka da zuwa Mahmud Crypto Bot\n\n"
+        "Zabi abinda kake so 👇"
+    )
 
     markup = telebot.types.InlineKeyboardMarkup()
     btn1 = telebot.types.InlineKeyboardButton("🏆 Top Coins", callback_data="topcoins")
     markup.add(btn1)
 
-    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(chat_id, text, reply_markup=markup)
 
-# ================== BUTTON HANDLER ==================
+# ================== CALLBACK HANDLER ==================
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
+    chat_id = call.message.chat.id
+
     if call.data == "topcoins":
         bot.answer_callback_query(call.id, "⏳ Ana dauko coins...")
 
-        coins = fetch_top_coins(5)
+        try:
+            coins = fetch_top_coins()
 
-        if not coins:
-            bot.send_message(call.message.chat.id, "❌ Failed to load top coins")
-            return
+            if not coins:
+                bot.send_message(chat_id, "❌ Failed to load top coins")
+                return
 
-        msg = "🏆 *Top Coins*\n\n"
+            msg = "🏆 *Top Crypto Coins:*\n\n"
 
-        i = 1
-        for coin in coins:
-            msg += (
-                f"{i}. *{coin['name']}* ({coin['symbol']})\n"
-                f"💰 Price: ${coin['price']}\n"
-                f"📊 24h: {coin['change']}%\n\n"
-            )
-            i += 1
+            for i, coin in enumerate(coins, start=1):
+                name = coin.get("name", "N/A")
+                symbol = coin.get("symbol", "").upper()
+                price = coin.get("price", "N/A")
 
-        bot.send_message(call.message.chat.id, msg, parse_mode="Markdown")
+                msg += f"{i}. *{name}* ({symbol}) — ${price}\n"
 
-# ================== RUN BOT ==================
+            bot.send_message(chat_id, msg, parse_mode="Markdown")
 
-print("Bot is running...")
-bot.infinity_polling()
+        except Exception as e:
+            bot.send_message(chat_id, "❌ Error while loading coins")
+            print("ERROR:", e)
+
+# ================== START BOT ==================
+
+print("🤖 Bot is running...")
+bot.infinity_polling(skip_pending=True)
