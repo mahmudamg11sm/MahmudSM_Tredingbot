@@ -5,9 +5,9 @@ def fetch_top_coins(limit=5):
     Fetch top cryptocurrencies by market cap from CoinGecko API.
     Returns a list of dictionaries: [{'name': ..., 'symbol': ..., 'price': ...}, ...]
     """
-    url = f"https://api.coingecko.com/api/v3/coins/markets"
+    url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {
-        "vs_currency": "usd",       # Zaka iya canza zuwa 'ngn' ko duk currency da kake so
+        "vs_currency": "usd",       # Canza zuwa 'ngn' ko duk currency da kake so
         "order": "market_cap_desc",
         "per_page": limit,
         "page": 1,
@@ -16,7 +16,7 @@ def fetch_top_coins(limit=5):
 
     try:
         response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()  # idan response bata da kyau zai tashi exception
+        response.raise_for_status()
         data = response.json()
 
         coins = []
