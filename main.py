@@ -6,7 +6,7 @@ import telebot
 from utils.coins import fetch_top_coins
 
 # ================== CONFIG ==================
-TOKEN = os.getenv("BOT_TOKEN")  # Ka saka BOT_TOKEN a Render Environment
+TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
 # ================== FLASK ==================
@@ -20,17 +20,13 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-# ================== START FLASK THREAD ==================
 Thread(target=run_flask).start()
 
 # ================== TELEGRAM BOT ==================
 
 @bot.message_handler(commands=["start"])
 def start(message):
-    text = (
-        "👋 Barka da zuwa *Mahmud Crypto Bot*\n\n"
-        "Zaɓi abinda kake so 👇"
-    )
+    text = "👋 Barka da zuwa *Mahmud Crypto Bot*\n\nZaɓi abinda kake so 👇"
 
     markup = telebot.types.InlineKeyboardMarkup()
     btn1 = telebot.types.InlineKeyboardButton("🏆 Top Coins", callback_data="topcoins")
@@ -45,26 +41,20 @@ def callback_handler(call):
     if call.data == "topcoins":
         bot.answer_callback_query(call.id, "⏳ Ana dauko coins...")
 
-        coins = fetch_top_coins(10)
+        coins = fetch_top_coins(5)
 
         if not coins:
             bot.send_message(call.message.chat.id, "❌ Failed to load top coins")
             return
 
-        msg = "🏆 *Top 10 Coins (CoinGecko)*\n\n"
+        msg = "🏆 *Top Coins*\n\n"
 
         i = 1
         for coin in coins:
-            change = coin["change"]
-            if change is None:
-                change_text = "N/A"
-            else:
-                change_text = f"{change:.2f}%"
-
             msg += (
                 f"{i}. *{coin['name']}* ({coin['symbol']})\n"
                 f"💰 Price: ${coin['price']}\n"
-                f"📊 24h: {change_text}\n\n"
+                f"📊 24h: {coin['change']}%\n\n"
             )
             i += 1
 
