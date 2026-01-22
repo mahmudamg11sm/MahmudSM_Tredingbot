@@ -1,77 +1,141 @@
 import os
-import telebot
-from flask import Flask
-from threading import Thread
+import requests
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from tradingview_ta import TA_Handler, Interval
 
-from utils.coins import fetch_top_coins
+# ============ CONFIG ============
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-# ================== CONFIG ==================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# ============ COINGECKO ============
+def get_price(coin_id):
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd"
+    r = requests.get(url, timeout=10)
+    data = r.json()
+    if coin_id in data:
+        return data[coin_id]["usd"]
+    return None
 
-if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN not found in environment variables!")
+# ============ COIN MAP ============
+COINS = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "BNB": "binancecoin",
+    "XRP": "ripple",
+    "ADA": "cardano",
+    "DOGE": "dogecoin",
+}
 
-bot = telebot.TeleBot(BOT_TOKEN)
+# ============ COMMANDS ============
 
-# ================== FLASK KEEP ALIVE ==================
-app = Flask(__name__)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = """
+👋 Barka da zuwa Crypto Signal Bot (Hausa)
 
-@app.route("/")
-def home():
-    return "🤖 Bot is running!"
+🪙 Umarnai:
+ /price BTC  → farashin coin
+ /signal ETH → signal & hasashe
 
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+📌 Coins:
+BTC, ETH, SOL, BNB, XRP, ADA, DOGE
 
-Thread(target=run_flask).start()
+⚠️ Wannan analysis ne kawai, ba shawarar saka kudi ba.
+"""
+    await update.message.reply_text(text)
 
-# ================== BOT COMMANDS ==================
-@bot.message_handler(commands=["start"])
-def start(message):
-    chat_id = message.chat.id
+# -------- PRICE --------
+async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) == 0:
+        await update.message.reply_text("❗ Rubuta misali: /price BTC")
+        return
 
-    text = (
-        "👋 Barka da zuwa Mahmud Crypto Bot\n\n"
-        "Zabi abinda kake so 👇"
+    symbol = context.args[0].upper()
+
+    if symbol not in COINS:
+        await update.message.reply_text("❌ Ban san wannan coin ba.")
+        return
+
+    coin_id = COINS[symbol]
+    p = get_price(coin_id)
+
+    if p is None:
+        await update.message.reply_text("❌ Kuskure wajen ɗauko price.")
+        return
+
+    await update.message.reply_text(f"💰 Farashin {symbol} yanzu: ${p}")
+
+# -------- SIGNAL --------
+async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) == 0:
+        await update.message.reply_text("❗ Rubuta misali: /signal ETH")
+        return
+
+    symbol = context.args[0].upper()
+
+    if symbol not in COINS:
+        await update.message.reply_text("❌ Ban san wannan coin ba.")
+        return
+
+    coin_id = COINS[symbol]
+    price_now = get_price(coin_id)
+
+    if price_now is None:
+        await update.message.reply_text("❌ Kuskure wajen ɗauko price.")
+        return
+
+    # TradingView Analysis
+    handler = TA_Handler(
+        symbol=symbol + "USDT",
+        screener="crypto",
+        exchange="BINANCE",
+        interval=Interval.INTERVAL_1_HOUR
     )
 
-    markup = telebot.types.InlineKeyboardMarkup()
-    btn1 = telebot.types.InlineKeyboardButton("🏆 Top Coins", callback_data="topcoins")
-    markup.add(btn1)
+    analysis = handler.get_analysis()
+    summary = analysis.summary
 
-    bot.send_message(chat_id, text, reply_markup=markup)
+    recommend = summary["RECOMMENDATION"]
 
-# ================== CALLBACK HANDLER ==================
-@bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call):
-    chat_id = call.message.chat.id
+    if recommend in ["BUY", "STRONG_BUY"]:
+        trend = "📈 Kasuwa na kokarin hawa (Bullish)"
+        target_up = round(price_now * 1.05, 2)
+        target_down = round(price_now * 0.97, 2)
+    elif recommend in ["SELL", "STRONG_SELL"]:
+        trend = "📉 Kasuwa na kokarin sauka (Bearish)"
+        target_up = round(price_now * 1.03, 2)
+        target_down = round(price_now * 0.95, 2)
+    else:
+        trend = "➖ Kasuwa na tafiya a tsakiya (Sideways)"
+        target_up = round(price_now * 1.03, 2)
+        target_down = round(price_now * 0.97, 2)
 
-    if call.data == "topcoins":
-        bot.answer_callback_query(call.id, "⏳ Ana dauko coins...")
+    text = f"""
+🪙 Coin: {symbol}
+💰 Price yanzu: ${price_now}
 
-        try:
-            coins = fetch_top_coins()
+📊 Trend:
+{trend}
 
-            if not coins:
-                bot.send_message(chat_id, "❌ Failed to load top coins")
-                return
+🎯 Hasashe:
+Zai iya hawa zuwa: ~ ${target_up}
+Ko ya sauka zuwa: ~ ${target_down}
 
-            msg = "🏆 *Top Crypto Coins:*\n\n"
+⚠️ Wannan hasashe ne na analysis kawai.
+"""
 
-            for i, coin in enumerate(coins, start=1):
-                name = coin.get("name", "N/A")
-                symbol = coin.get("symbol", "").upper()
-                price = coin.get("price", "N/A")
+    await update.message.reply_text(text)
 
-                msg += f"{i}. *{name}* ({symbol}) — ${price}\n"
+# ============ MAIN ============
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-            bot.send_message(chat_id, msg, parse_mode="Markdown")
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("price", price))
+    app.add_handler(CommandHandler("signal", signal))
 
-        except Exception as e:
-            bot.send_message(chat_id, "❌ Error while loading coins")
-            print("ERROR:", e)
+    print("Bot yana gudana...")
+    app.run_polling()
 
-# ================== START BOT ==================
-print("🤖 Bot is running...")
-bot.infinity_polling(skip_pending=True)
+if __name__ == "__main__":
+    main()
