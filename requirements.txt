@@ -2,3 +2,4 @@ python-telegram-bot==20.3
 requests
 tradingview_ta
 Pillow
+python-telegram-bot[job-queue]
