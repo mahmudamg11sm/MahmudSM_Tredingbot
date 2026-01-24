@@ -1,158 +1,164 @@
 import os
-import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
+    ApplicationBuilder, ContextTypes, CommandHandler,
+    CallbackQueryHandler, MessageHandler, filters
 )
 from tradingview_ta import TA_Handler, Interval
 
-# ====== CONFIG ======
+# ================= CONFIG =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_USERNAME = os.environ.get("CHANNEL_USERNAME")  # Example: @YourChannel
-ADMIN_ID = int(os.environ.get("CHAT_ID"))  # Your Telegram ID
+CHANNEL_USERNAME = "@Mahmudsm1"
+ADMIN_ID = 6648308251
 
-# ====== LOGGING ======
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# ================= USERS STORAGE =================
+USERS = set()
 
-# ====== COINS ======
-COINS = ["BTC","ETH","SOL","BNB","XRP","ADA","DOGE"]
+# ================= COINS =================
+COINS = [
+    "BTCUSDT", "ETHUSDT", "ADAUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "LTCUSDT",
+    "DOTUSDT", "LINKUSDT", "BCHUSDT", "UNIUSDT", "MATICUSDT", "ATOMUSDT", "ETCUSDT",
+    "XLMUSDT", "FILUSDT", "TRXUSDT", "EOSUSDT", "AAVEUSDT", "ALGOUSDT", "AVAXUSDT",
+    "CHZUSDT", "CRVUSDT", "DASHUSDT", "ENJUSDT", "FTMUSDT", "ICPUSDT", "KSMUSDT",
+    "NEARUSDT", "QNTUSDT", "RUNEUSDT", "SNXUSDT", "SUSHIUSDT", "THETAUSDT", "VETUSDT",
+    "XMRUSDT", "YFIUSDT", "ZECUSDT", "BATUSDT", "1INCHUSDT", "AXSUSDT", "CAKEUSDT",
+    "COMPUSDT", "CROUSDT", "DGBUSDT", "EGLDUSDT", "GRTUSDT", "HOTUSDT", "KNCUSDT",
+    "LRCUSDT", "MANAUSDT", "NEOUSDT", "OCEANUSDT", "OMGUSDT", "PAXGUSDT", "RENUSDT",
+    "RSRUSDT", "SCUSDT", "STORJUSDT", "SXPUSDT", "TFUELUSDT", "TWTUSDT", "UMAUSDT",
+    "WAVESUSDT", "XEMUSDT", "XTZUSDT", "ZRXUSDT", "BALUSDT", "BELUSDT", "BNTUSDT",
+    "COTIUSDT", "DIAUSDT", "GLMUSDT", "KAVAUSDT", "LINAUSDT", "OXTUSDT", "SRMUSDT",
+    "WTCUSDT", "YFIIUSDT", "CTSIUSDT", "SANDUSDT"
+]
 
-# ====== SOCIAL BUTTONS ======
+COINS_PER_PAGE = 16
+
+# ================= SOCIAL BUTTONS =================
 def social_buttons():
-    buttons = [
+    keyboard = [
         [InlineKeyboardButton("Telegram", url="https://t.me/Mahmudsm1")],
         [InlineKeyboardButton("X", url="https://x.com/Mahmud_sm1")],
         [InlineKeyboardButton("Facebook", url="https://www.facebook.com/profile.php?id=61580620438042")]
     ]
-    return InlineKeyboardMarkup(buttons)
+    return InlineKeyboardMarkup(keyboard)
 
-# ====== COINS BUTTONS ======
-def coins_buttons():
+# ================= COIN BUTTONS PAGINATION =================
+def get_coin_buttons(page: int = 0):
+    start = page * COINS_PER_PAGE
+    end = start + COINS_PER_PAGE
+    coins_slice = COINS[start:end]
+
     keyboard = []
     row = []
-    for i, coin in enumerate(COINS, 1):
+    for i, coin in enumerate(coins_slice, 1):
         row.append(InlineKeyboardButton(coin, callback_data=f"coin_{coin}"))
         if i % 4 == 0:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
+
+    # Add navigation buttons
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"page_{page-1}"))
+    if end < len(COINS):
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"page_{page+1}"))
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
     return InlineKeyboardMarkup(keyboard)
 
-# ====== JOIN CHANNEL CHECK ======
-async def check_membership(user_id, application):
-    try:
-        member = await application.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        return member.status != "left"
-    except:
-        return False
-
-# ====== START COMMAND ======
+# ================= COMMANDS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    joined = await check_membership(user_id, context.application)
-    
-    if not joined:
+    user = update.effective_user
+    USERS.add(user.id)
+
+    # Channel verification
+    try:
+        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user.id)
+        if member.status in ["left", "kicked"]:
+            await update.message.reply_text(
+                f"Don amfani da bot, sai ka shiga channel ɗinmu: {CHANNEL_USERNAME}"
+            )
+            return
+    except:
         await update.message.reply_text(
             f"Don amfani da bot, sai ka shiga channel ɗinmu: {CHANNEL_USERNAME}"
         )
         return
-    
+
+    # Greet user
     await update.message.reply_text(
         "Barka da zuwa Dynamic Auto Signal Bot 🚀\n\nBi mu a shafukanmu:",
         reply_markup=social_buttons()
     )
-    await update.message.reply_text(
-        "Zaɓi coin daga kasa don samun Price/Signal:",
-        reply_markup=coins_buttons()
-    )
 
-# ====== CALLBACK QUERY HANDLER ======
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Show first page of coins
+    await update.message.reply_text("Zabi coin ko rubuta sunan coin:", reply_markup=get_coin_buttons(0))
+
+# ================= CALLBACK HANDLER =================
+async def coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
     data = query.data
+
     if data.startswith("coin_"):
         coin = data.split("_")[1]
+        await send_coin_price(query.message, coin, context)
+    elif data.startswith("page_"):
+        page = int(data.split("_")[1])
+        await query.message.edit_reply_markup(get_coin_buttons(page))
+
+# ================= MESSAGE HANDLER (SEARCH) =================
+async def coin_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    coin = update.message.text.upper().replace(" ", "")
+    await send_coin_price(update.message, coin, context)
+
+# ================= SEND COIN PRICE + SIGNAL =================
+async def send_coin_price(message, coin, context):
+    try:
         handler = TA_Handler(
             symbol=coin,
             screener="crypto",
-            exchange="BINANCE",
+            exchange="BYBIT",
             interval=Interval.INTERVAL_1_DAY
         )
-        try:
-            analysis = handler.get_analysis()
-            trend = analysis.summary["RECOMMENDATION"]
-            price_now = analysis.indicators["close"]
-            high = analysis.indicators.get("high", price_now)
-            low = analysis.indicators.get("low", price_now)
-            text = (
-                f"Coin: {coin}\n"
-                f"💰 Price yanzu: ${price_now}\n"
-                f"📊 Trend: {trend}\n"
-                f"🎯 Hasashe:\n ~Hawa: ${high}\n ~Sauka: ${low}\n"
-                f"⚠ Wannan hasashe ne na analysis kawai."
-            )
-            await query.edit_message_text(text)
-        except Exception as e:
-            await query.edit_message_text(f"Ba a samu coin ba: {coin}")
-
-# ====== BROADCAST ======
-async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("Ba kai admin bane.")
-        return
-
-    msg = " ".join(context.args)
-    if not msg:
-        await update.message.reply_text("Rubuta sako bayan /broadcast")
-        return
-    
-    # NOTE: You can extend this to all users
-    try:
-        await context.bot.send_message(chat_id=ADMIN_ID, text=msg)
-        await update.message.reply_text("Sako an aika!")
+        analysis = handler.get_analysis()
+        price = analysis.indicators.get("close", "N/A")
+        signal = analysis.summary.get("RECOMMENDATION", "N/A")
+        await message.reply_text(f"{coin} Price: {price}\nSignal: {signal}")
     except Exception as e:
-        await update.message.reply_text(f"An samu matsala: {e}")
+        await message.reply_text(f"Ba a samu coin ba: {coin}")
 
-# ====== MAIN ======
+# ================= ADMIN / BROADCAST =================
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("Ba kai bane admin!")
+        return
+    if not context.args:
+        await update.message.reply_text("Rubuta saƙo bayan /broadcast")
+        return
+    text = " ".join(context.args)
+    for user in USERS:
+        try:
+            await context.bot.send_message(chat_id=user, text=text)
+        except:
+            continue
+    await update.message.reply_text("Broadcast ya tafi!")
+
+# ================= MAIN =================
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    
-    # Commands
+
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(coin_callback))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), coin_search))
     app.add_handler(CommandHandler("broadcast", broadcast))
-    
-    # CallbackQuery
-    app.add_handler(CallbackQueryHandler(button_handler))
-    
-    # Run bot
+
+    print("Dynamic Auto Signal Bot v7 yana gudana...")
     await app.run_polling()
 
 if __name__ == "__main__":
-    import asyncio
-    import sys
-
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    
-    # Commands
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("broadcast", broadcast))
-    
-    # CallbackQuery
-    app.add_handler(CallbackQueryHandler(button_handler))
-
-    # Railway / environment da event loop riga yana running
-    try:
-        # Idan loop riga yana running (Railway), yi run_polling() da sync wrapper
-        loop = asyncio.get_event_loop()
-        loop.create_task(app.run_polling())
-        loop.run_forever()
-    except RuntimeError:
-        # fallback, idan environment ya bari
-        app.run_polling()
+    asyncio.run(main())
