@@ -1,48 +1,53 @@
 import os
-import json
+import logging
 import requests
-import asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+)
 
-# ================= CONFIG =================
+# ================== CONFIG ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")  # misali: @Mahmudsm1
+ADMIN_ID = int(os.getenv("CHAT_ID"))  # naka Telegram ID
 
-if not BOT_TOKEN or not CHANNEL_USERNAME or not ADMIN_ID:
-    raise RuntimeError("Ka tabbata ka sa BOT_TOKEN, CHANNEL_USERNAME, ADMIN_ID a Railway Variables")
+logging.basicConfig(level=logging.INFO)
 
-# ================= DATA =================
-USERS_FILE = "users.json"
+# ================== COINS ==================
+COINS = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "BNB": "binancecoin",
+    "XRP": "ripple",
+    "ADA": "cardano",
+    "DOGE": "dogecoin",
+}
 
-def load_users():
-    if not os.path.exists(USERS_FILE):
-        return set()
-    with open(USERS_FILE, "r") as f:
-        return set(json.load(f))
-
-def save_users(users):
-    with open(USERS_FILE, "w") as f:
-        json.dump(list(users), f)
-
-USERS = load_users()
-
-# ================= COINS =================
-COINS = ["BTC","ETH","SOL","BNB","XRP","ADA","DOGE","LTC","TRX","MATIC","AVAX","DOT","LINK","UNI","SHIB"]
-
-# ================= KEYBOARDS =================
+# ================== KEYBOARDS ==================
 def coin_keyboard():
-    rows = []
+    buttons = []
     row = []
-    for c in COINS:
-        row.append(c)
+    for c in COINS.keys():
+        row.append(InlineKeyboardButton(c, callback_data=f"coin_{c}"))
         if len(row) == 3:
-            rows.append(row)
+            buttons.append(row)
             row = []
     if row:
-        rows.append(row)
-    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+        buttons.append(row)
+
+    buttons.append([InlineKeyboardButton("📢 Social Links", callback_data="social")])
+    return InlineKeyboardMarkup(buttons)
+
+def social_buttons():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Telegram Channel", url="https://t.me/Mahmudsm1")],
+        [InlineKeyboardButton("🐦 X (Twitter)", url="https://x.com/Mahmud_sm1")],
+        [InlineKeyboardButton("📘 Facebook", url="https://www.facebook.com/profile.php?id=61580620438042")],
+    ])
 
 def join_keyboard():
     return InlineKeyboardMarkup([
@@ -50,154 +55,156 @@ def join_keyboard():
         [InlineKeyboardButton("✅ Na shiga (Check)", callback_data="check_join")]
     ])
 
-# ================= JOIN CHECK =================
-async def is_joined(user_id, context):
+# ================== HELPERS ==================
+def get_price(coin_id):
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd"
+    r = requests.get(url, timeout=10)
+    data = r.json()
+    if coin_id in data:
+        return data[coin_id]["usd"]
+    return None
+
+async def is_user_joined(bot, user_id: int):
     try:
-        m = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return m.status in ["member","administrator","creator"]
+        member = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        return member.status in ["member", "administrator", "creator"]
     except:
         return False
 
-# ================= START =================
+# ================== COMMANDS ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not await is_joined(user.id, context):
-        await update.message.reply_text("❗ Dole ne ka shiga channel kafin amfani da bot.", reply_markup=join_keyboard())
+
+    joined = await is_user_joined(context.bot, user.id)
+    if not joined:
+        await update.message.reply_text(
+            "❗ Dole ka shiga channel ɗin mu kafin amfani da bot.\n\nDa fatan ka shiga:",
+            reply_markup=join_keyboard()
+        )
         return
 
-    USERS.add(user.id)
-    save_users(USERS)
-
     await update.message.reply_text(
-        "🚀 Barka da zuwa Dynamic Auto Signal Bot\n\nZaɓi coin ko yi amfani da:\n/price BTC\n/signal ETH",
+        "🚀 Barka da zuwa *Dynamic Auto Signal Bot*\n\nZaɓi coin:",
+        parse_mode="Markdown",
         reply_markup=coin_keyboard()
     )
 
-# ================= CHECK BUTTON =================
-async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    user_id = q.from_user.id
+# ================== BUTTON HANDLER ==================
+async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    if await is_joined(user_id, context):
-        USERS.add(user_id)
-        save_users(USERS)
-        await q.edit_message_text("✅ Yanzu zaka iya amfani da bot.")
-        await context.bot.send_message(user_id, "Zaɓi coin:", reply_markup=coin_keyboard())
+    user = query.from_user
+
+    # check join
+    if query.data == "check_join":
+        joined = await is_user_joined(context.bot, user.id)
+        if not joined:
+            await query.edit_message_text(
+                "❌ Har yanzu baka shiga channel ba.\nDa fatan ka shiga:",
+                reply_markup=join_keyboard()
+            )
+            return
+
+        await query.edit_message_text(
+            "✅ Ka shiga! Yanzu zaɓi coin:",
+            reply_markup=coin_keyboard()
+        )
+        return
+
+    if query.data == "social":
+        await query.message.reply_text(
+            "📢 Bi mu a shafukanmu:",
+            reply_markup=social_buttons()
+        )
+        return
+
+    if query.data.startswith("coin_"):
+        symbol = query.data.replace("coin_", "")
+        await send_signal(query, context, symbol)
+
+# ================== SIGNAL FUNCTION ==================
+async def send_signal(query, context, symbol):
+    if symbol not in COINS:
+        await query.message.reply_text("❌ Ban san wannan coin ba.")
+        return
+
+    coin_id = COINS[symbol]
+    price_now = get_price(coin_id)
+
+    if price_now is None:
+        await query.message.reply_text("❌ Kuskure wajen ɗauko price.")
+        return
+
+    # Fake simple trend (for now)
+    import random
+    trend_type = random.choice(["bull", "bear", "side"])
+
+    if trend_type == "bull":
+        trend = "📈 Kasuwa na kokarin hawa (Bullish)"
+        target_up = round(price_now * 1.05, 2)
+        target_down = round(price_now * 0.97, 2)
+    elif trend_type == "bear":
+        trend = "📉 Kasuwa na kokarin sauka (Bearish)"
+        target_up = round(price_now * 1.03, 2)
+        target_down = round(price_now * 0.95, 2)
     else:
-        await q.edit_message_text("❌ Har yanzu baka shiga channel ba.", reply_markup=join_keyboard())
+        trend = "➖ Kasuwa na tafiya a tsakiya (Sideways)"
+        target_up = round(price_now * 1.03, 2)
+        target_down = round(price_now * 0.97, 2)
 
-# ================= PRICE =================
+    text = f"""
+🪙 Coin: {symbol}
+💰 Price yanzu: ${price_now}
+
+📊 Trend:
+{trend}
+
+🎯 Hasashe:
+Zai iya hawa zuwa: ~ ${target_up}
+Ko ya sauka zuwa: ~ ${target_down}
+
+⚠️ Wannan hasashe ne na analysis kawai.
+"""
+
+    await query.message.reply_text(text)
+
+# ================== PRICE COMMAND ==================
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Misali: /price BTC")
+        await update.message.reply_text("Rubuta: /price BTC")
         return
 
-    coin = context.args[0].upper()
-    try:
-        r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={coin}USDT", timeout=10)
-        p = float(r.json()["price"])
-        await update.message.reply_text(f"💰 {coin} Price: ${p:,.2f}")
-    except:
-        await update.message.reply_text("❌ Coin ba a samu ba.")
-
-# ================= SIGNAL =================
-async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Misali: /signal BTC")
+    symbol = context.args[0].upper()
+    if symbol not in COINS:
+        await update.message.reply_text("❌ Ban san wannan coin ba.")
         return
 
-    coin = context.args[0].upper()
-    try:
-        r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={coin}USDT", timeout=10)
-        p = float(r.json()["price"])
-        high = p * 1.03
-        low = p * 0.97
+    p = get_price(COINS[symbol])
+    await update.message.reply_text(f"💰 Farashin {symbol} yanzu: ${p}")
 
-        text = (
-            f"🪙 {coin}\n"
-            f"💰 Price: ${p:,.2f}\n"
-            f"🎯 Target: ~ ${high:,.2f}\n"
-            f"🛑 Stop: ~ ${low:,.2f}\n\n"
-            f"⚠️ Analysis ne kawai."
-        )
-
-        await update.message.reply_text(text)
-
-    except:
-        await update.message.reply_text("❌ Error.")
-
-# ================= TEXT BUTTON =================
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    txt = update.message.text.upper()
-    if txt in COINS:
-        context.args = [txt]
-        await signal(update, context)
-
-# ================= ADMIN PANEL =================
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    await update.message.reply_text(
-        f"👑 Admin Panel\n\nUsers: {len(USERS)}\n\nCommands:\n/broadcast sako"
-    )
-
-# ================= BROADCAST =================
+# ================== BROADCAST (ADMIN) ==================
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
     if not context.args:
-        await update.message.reply_text("Misali: /broadcast Hello")
+        await update.message.reply_text("Rubuta: /broadcast sakonka")
         return
 
-    msg = " ".join(context.args)
-    sent = 0
+    text = " ".join(context.args)
+    await update.message.reply_text("✅ An tura sakon (demo).")
 
-    for uid in list(USERS):
-        try:
-            await context.bot.send_message(uid, msg)
-            sent += 1
-            await asyncio.sleep(0.05)
-        except:
-            pass
-
-    await update.message.reply_text(f"✅ An tura zuwa users {sent}")
-
-# ================= AUTO POST =================
-async def auto_post(app):
-    await asyncio.sleep(20)
-    while True:
-        try:
-            coin = "BTC"
-            r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={coin}USDT", timeout=10)
-            p = float(r.json()["price"])
-
-            text = f"📊 Auto Signal\n\n🪙 BTC\n💰 Price: ${p:,.2f}\n⚠️ Wannan analysis ne kawai."
-
-            await app.bot.send_message(CHANNEL_USERNAME, text)
-        except:
-            pass
-
-        await asyncio.sleep(3600)  # 1 hour
-
-# ================= MAIN =================
+# ================== MAIN ==================
 def main():
-    print("🚀 Bot yana gudana...")
-
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("price", price))
-    app.add_handler(CommandHandler("signal", signal))
-    app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CommandHandler("broadcast", broadcast))
-    app.add_handler(CallbackQueryHandler(check_join_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    app.add_handler(CallbackQueryHandler(on_button))
 
-    app.job_queue.run_once(lambda ctx: asyncio.create_task(auto_post(app)), 10)
-
+    print("Dynamic Auto Signal Bot yana gudana...")
     app.run_polling()
 
 if __name__ == "__main__":
