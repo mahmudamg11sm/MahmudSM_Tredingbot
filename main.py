@@ -136,4 +136,23 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(main())
+    import sys
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    # Commands
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    
+    # CallbackQuery
+    app.add_handler(CallbackQueryHandler(button_handler))
+
+    # Railway / environment da event loop riga yana running
+    try:
+        # Idan loop riga yana running (Railway), yi run_polling() da sync wrapper
+        loop = asyncio.get_event_loop()
+        loop.create_task(app.run_polling())
+        loop.run_forever()
+    except RuntimeError:
+        # fallback, idan environment ya bari
+        app.run_polling()
