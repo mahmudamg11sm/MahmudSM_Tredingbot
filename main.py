@@ -6,8 +6,9 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, ContextTypes,
 from tradingview_ta import TA_Handler, Interval
 
 # ================= CONFIG =================
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 # ================= COINS =================
 COINS = {
