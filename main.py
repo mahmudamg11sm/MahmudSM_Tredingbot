@@ -2,25 +2,35 @@ import os
 import asyncio
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+)
 
 # ================= CONFIG =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_USERNAME = "@Mahmudsm1"
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
-BYBIT_API = "https://api.bybit.com/v2/public/tickers?symbol="  # Bybit endpoint
+COIN_REFRESH_INTERVAL = 30  # seconds
 
 # ================= HELPERS =================
 async def fetch_coins():
     coins = []
     async with httpx.AsyncClient() as client:
-        r = await client.get("https://api.bybit.com/v2/public/tickers")
-        data = r.json()
-        if "result" in data:
-            for item in data["result"]:
-                symbol = item["symbol"]
-                price = item.get("last_price", "N/A")
-                coins.append({"symbol": symbol, "price": price})
+        try:
+            r = await client.get("https://api.bybit.com/v2/public/tickers")
+            data = r.json()
+            if "result" in data:
+                for item in data["result"]:
+                    symbol = item["symbol"]
+                    price = item.get("last_price", "N/A")
+                    coins.append({"symbol": symbol, "price": price})
+        except Exception as e:
+            print("Error fetching coins:", e)
     return coins
 
 def build_coins_keyboard(coins, per_row=4):
@@ -60,7 +70,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     coins = await fetch_coins()
-    context.user_data["coins"] = coins  # store for search & callback
+    context.application_data["coins"] = coins
     await update.message.reply_text(
         "Zaɓi coin daga list ɗin:",
         reply_markup=build_coins_keyboard(coins)
@@ -70,7 +80,7 @@ async def coin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     _, symbol = query.data.split(":")
-    coins = context.user_data.get("coins", [])
+    coins = context.application_data.get("coins", [])
     coin = next((c for c in coins if c["symbol"] == symbol), None)
     if coin:
         await query.edit_message_text(f"Signal/Price don {symbol}: {coin['price']}", reply_markup=build_coins_keyboard(coins))
@@ -79,7 +89,7 @@ async def coin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def search_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().upper()
-    coins = context.user_data.get("coins", [])
+    coins = context.application_data.get("coins", [])
     matches = [c for c in coins if text in c["symbol"]]
     if matches:
         await update.message.reply_text(
@@ -99,8 +109,18 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(f"[Broadcast]: {msg}")
 
+# ================= AUTO REFRESH TASK =================
+async def refresh_coins_task(application):
+    while True:
+        try:
+            coins = await fetch_coins()
+            application.application_data["coins"] = coins
+        except Exception as e:
+            print("Error refreshing coins:", e)
+        await asyncio.sleep(COIN_REFRESH_INTERVAL)
+
 # ================= MAIN =================
-async def main():
+if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -108,8 +128,10 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), search_coin))
     app.add_handler(CommandHandler("broadcast", broadcast))
 
-    print("Dynamic Auto Signal Bot v10 yana gudana...")
-    await app.run_polling()
+    print("Dynamic Auto Signal Bot v12 yana gudana...")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    # Start auto-refresh coins
+    app.job_queue.run_repeating(lambda ctx: asyncio.create_task(refresh_coins_task(app)), interval=COIN_REFRESH_INTERVAL, first=0)
+
+    # Start polling
+    app.run_polling()
