@@ -1,5 +1,7 @@
 python-telegram-bot[job-queue]==20.3
-tradingview_ta
-python-dotenv
-aiohttp
-nest_asyncio
+tradingview_ta==4.4.0
+requests==2.31.0
+python-dotenv==1.0.0
+aiohttp==3.8.4
+nest_asyncio==1.5.8
+Pillow==10.1.0
