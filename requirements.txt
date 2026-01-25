@@ -1,5 +1,5 @@
 python-telegram-bot==20.3
 requests
 tradingview_ta
-Pillow
-nest_asyncio
+python-dotenv
+aiohttp
