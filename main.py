@@ -1,38 +1,37 @@
 import os
-import asyncio
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 from tradingview_ta import TA_Handler, Interval
-from dotenv import load_dotenv
-import nest_asyncio
 
-# ========== LOAD ENV ==========
-load_dotenv()
+# ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "6648308251"))
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@Mahmudsm1")
 
-# ========== CONFIG ==========
+# Timeframes
 TIMEFRAMES = {
     "1H": Interval.INTERVAL_1_HOUR,
     "4H": Interval.INTERVAL_4_HOURS,
     "1D": Interval.INTERVAL_1_DAY
 }
 
-# 100+ coins
-COINS = sorted(set([
-    "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT","DOGEUSDT","AVAXUSDT","MATICUSDT","DOTUSDT",
-    "LTCUSDT","TRXUSDT","LINKUSDT","ATOMUSDT","UNIUSDT","OPUSDT","ARBUSDT","FILUSDT","NEARUSDT","APEUSDT",
-    "SUIUSDT","INJUSDT","TIAUSDT","SEIUSDT","RUNEUSDT","AAVEUSDT","ETCUSDT","EOSUSDT","ICPUSDT","FTMUSDT",
-    "GALAUSDT","SANDUSDT","MANAUSDT","CHZUSDT","1000PEPEUSDT","WIFUSDT","BONKUSDT","FLOKIUSDT","ORDIUSDT",
-    "JUPUSDT","PYTHUSDT","DYDXUSDT","CRVUSDT","SNXUSDT","GMXUSDT","COMPUSDT","ZILUSDT","KSMUSDT","NEOUSDT",
-    "XTZUSDT","MINAUSDT","ROSEUSDT","CELOUSDT","LDOUSDT","YFIUSDT","MASKUSDT","BLURUSDT","MAGICUSDT",
-    "IMXUSDT","RNDRUSDT","STXUSDT","ARUSDT","KASUSDT","CFXUSDT","IDUSDT","HOOKUSDT","HIGHUSDT"
-]))
+# Coins
+COINS = sorted([
+    "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT","DOGEUSDT",
+    "AVAXUSDT","MATICUSDT","DOTUSDT","LTCUSDT","TRXUSDT","LINKUSDT","ATOMUSDT",
+    "UNIUSDT","OPUSDT","ARBUSDT","FILUSDT","NEARUSDT","APEUSDT","SUIUSDT","INJUSDT"
+])
 
 logging.basicConfig(level=logging.INFO)
-nest_asyncio.apply()  # Fix asyncio loop issues
 
 # ================= HELPERS =================
 async def is_user_in_channel(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
@@ -49,6 +48,7 @@ def coins_keyboard(page=0, per_page=15):
 
     keyboard = []
     row = []
+
     for i, coin in enumerate(chunk, 1):
         row.append(InlineKeyboardButton(coin.replace("USDT",""), callback_data=f"coin:{coin}"))
         if i % 3 == 0:
@@ -68,38 +68,43 @@ def coins_keyboard(page=0, per_page=15):
     return InlineKeyboardMarkup(keyboard)
 
 # ================= SIGNAL =================
-def get_signal(symbol: str):
-    results = {}
-    strong_only = False
+def get_signal(symbol: str, timeframe: str, only_strong=False):
+    handler = TA_Handler(
+        symbol=symbol,
+        screener="crypto",
+        exchange="BYBIT",
+        interval=TIMEFRAMES[timeframe]
+    )
+    analysis = handler.get_analysis()
+    summary = analysis.summary
+    rec_tv = summary["RECOMMENDATION"]
 
-    for tf_name, tf_interval in TIMEFRAMES.items():
-        handler = TA_Handler(symbol=symbol, screener="crypto", exchange="BYBIT", interval=tf_interval)
-        analysis = handler.get_analysis()
-        rec = analysis.summary["RECOMMENDATION"]
-        results[tf_name] = rec
-        if rec in ["STRONG_BUY", "STRONG_SELL"]:
-            strong_only = True
+    if only_strong and rec_tv not in ["STRONG_BUY", "STRONG_SELL"]:
+        raise ValueError(f"Signal for {symbol} ({timeframe}) is not STRONG. Skipped.")
 
-    # Get current price
-    price = float(handler.get_analysis().indicators["close"])
+    price = float(analysis.indicators["close"])
 
-    # Default values
-    rec_tv = results["4H"]
-    if rec_tv in ["BUY","STRONG_BUY"]:
+    if rec_tv in ["BUY", "STRONG_BUY"]:
         rec = "BUY"
         entry = price
         sl = price * 0.97
-        tp1, tp2, tp3 = price*1.05, price*1.12, price*1.30
-    elif rec_tv in ["SELL","STRONG_SELL"]:
+        tp1 = price * 1.05
+        tp2 = price * 1.12
+        tp3 = price * 1.30
+    elif rec_tv in ["SELL", "STRONG_SELL"]:
         rec = "SELL"
         entry = price
         sl = price * 1.03
-        tp1, tp2, tp3 = price*0.95, price*0.88, price*0.70
+        tp1 = price * 0.95
+        tp2 = price * 0.88
+        tp3 = price * 0.70
     else:
         rec = "NEUTRAL"
         entry = price
         sl = price * 0.99
-        tp1, tp2, tp3 = price*1.01, price*1.02, price*1.03
+        tp1 = price * 1.01
+        tp2 = price * 1.02
+        tp3 = price * 1.03
 
     return {
         "symbol": symbol,
@@ -109,9 +114,42 @@ def get_signal(symbol: str):
         "tp1": tp1,
         "tp2": tp2,
         "tp3": tp3,
-        "results": results,
-        "strong_only": strong_only
+        "buy": summary["BUY"],
+        "sell": summary["SELL"],
+        "neutral": summary["NEUTRAL"],
+        "raw_rec": rec_tv
     }
+
+def format_signal_text(signal: dict, timeframe: str):
+    return f"""
+📊 Signal for {signal['symbol']} ({timeframe})
+
+📈 Recommendation: {signal['rec']}
+
+🎯 Entry: {signal['entry']:.4f}
+🛑 Stop Loss: {signal['sl']:.4f}
+
+💰 Take Profit 1: {signal['tp1']:.4f}
+💰 Take Profit 2: {signal['tp2']:.4f}
+💰 Take Profit 3: {signal['tp3']:.4f}
+
+🟢 Buy: {signal['buy']}
+🔴 Sell: {signal['sell']}
+⚪ Neutral: {signal['neutral']}
+
+⚠️ Not financial advice.
+"""
+
+# ================= AUTO POST =================
+async def auto_scan_and_post(app):
+    for symbol in COINS:
+        try:
+            s4h = get_signal(symbol, "4H", only_strong=True)  # STRONG only
+            text = format_signal_text(s4h, "4H")
+            await app.bot.send_message(chat_id=CHANNEL_USERNAME, text=text)
+            logging.info(f"Posted {symbol} 4H STRONG signal")
+        except Exception as e:
+            logging.info(str(e))
 
 # ================= COMMANDS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -121,10 +159,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")],
             [InlineKeyboardButton("✅ Na shiga", callback_data="check_join")]
         ])
-        await update.message.reply_text(f"Don amfani da bot, sai ka shiga channel ɗinmu:\n{CHANNEL_USERNAME}", reply_markup=btn)
+        await update.message.reply_text(
+            f"Don amfani da bot, sai ka shiga channel ɗinmu:\n{CHANNEL_USERNAME}",
+            reply_markup=btn
+        )
         return
 
-    await update.message.reply_text("Barka da zuwa Dynamic Auto Signal Bot 🚀\n\nZaɓi coin ko ka rubuta sunansa:", reply_markup=coins_keyboard(0))
+    await update.message.reply_text(
+        "Barka da zuwa Dynamic Auto Signal Bot 🚀\nZaɓi coin ko ka rubuta sunansa:",
+        reply_markup=coins_keyboard(0)
+    )
 
 async def check_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -147,31 +191,14 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("coin:"):
         symbol = data.split(":")[1]
-        try:
-            s = get_signal(symbol)
-            if not s["strong_only"]:
-                await query.edit_message_text(f"⚠️ Signal for {symbol} is not STRONG. Skipped.")
-                return
-
-            text = f"""
-📊 Signal for {s['symbol']} (4H Strong)
-
-📈 Recommendation: {s['rec']}
-🎯 Entry: {s['entry']:.4f}
-🛑 Stop Loss: {s['sl']:.4f}
-💰 Take Profit 1: {s['tp1']:.4f}
-💰 Take Profit 2: {s['tp2']:.4f}
-💰 Take Profit 3: {s['tp3']:.4f}
-
-1H: {s['results']['1H']}
-4H: {s['results']['4H']}
-1D: {s['results']['1D']}
-
-⚠️ Not financial advice.
-"""
-            await query.edit_message_text(text)
-        except:
-            await query.edit_message_text("❌ An samu matsala wajen ɗauko signal.")
+        msg_list = []
+        for tf in ["1H","4H","1D"]:
+            try:
+                s = get_signal(symbol, tf, only_strong=False)  # All signals
+                msg_list.append(format_signal_text(s, tf))
+            except:
+                msg_list.append(f"❌ Ba a samu signal ba: {symbol} ({tf})")
+        await query.edit_message_text("\n\n".join(msg_list))
 
 # ================= SEARCH =================
 async def search_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -184,62 +211,32 @@ async def search_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text.endswith("USDT"):
         text += "USDT"
 
-    try:
-        s = get_signal(text)
-        if not s["strong_only"]:
-            await update.message.reply_text(f"⚠️ Signal for {text} is not STRONG. Skipped.")
-            return
-
-        msg = f"""
-📊 Signal for {s['symbol']} (4H Strong)
-
-📈 Recommendation: {s['rec']}
-🎯 Entry: {s['entry']:.4f}
-🛑 Stop Loss: {s['sl']:.4f}
-💰 Take Profit 1: {s['tp1']:.4f}
-💰 Take Profit 2: {s['tp2']:.4f}
-💰 Take Profit 3: {s['tp3']:.4f}
-
-1H: {s['results']['1H']}
-4H: {s['results']['4H']}
-1D: {s['results']['1D']}
-
-⚠️ Not financial advice.
-"""
-        await update.message.reply_text(msg)
-
-        if text not in COINS:
-            COINS.append(text)
-            COINS.sort()
-    except:
-        await update.message.reply_text(f"❌ Ba a samu coin ba: {text}")
-
-# ================= AUTO 4H POST =================
-async def auto_scan_and_post(app):
-    for coin in COINS:
+    msg_list = []
+    for tf in ["1H","4H","1D"]:
         try:
-            s = get_signal(coin)
-            if s["strong_only"]:
-                msg = f"🔔 Auto 4H Strong Signal\n\n📊 {s['symbol']}\n📈 {s['rec']}\n🎯 Entry: {s['entry']:.4f}\n🛑 SL: {s['sl']:.4f}\n💰 TP1: {s['tp1']:.4f}\n💰 TP2: {s['tp2']:.4f}\n💰 TP3: {s['tp3']:.4f}"
-                await app.bot.send_message(CHANNEL_USERNAME, msg)
+            s = get_signal(text, tf, only_strong=False)
+            msg_list.append(format_signal_text(s, tf))
         except:
-            continue
+            msg_list.append(f"❌ Ba a samu signal ba: {text} ({tf})")
+    await update.message.reply_text("\n\n".join(msg_list))
 
 # ================= MAIN =================
 async def main():
-    print("Dynamic Auto Signal Bot PRO FINAL yana gudana...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(check_join, pattern="check_join"))
     app.add_handler(CallbackQueryHandler(callbacks))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_coin))
 
-    # Auto 4H Strong signals
-    app.job_queue.run_repeating(lambda ctx: asyncio.create_task(auto_scan_and_post(app)), interval=14400, first=10)
+    # Auto post every 4H
+    async def job_wrapper(context):
+        await auto_scan_and_post(app)
+
+    app.job_queue.run_repeating(job_wrapper, interval=14400, first=10)  # 4H
 
     await app.run_polling()
 
 if __name__ == "__main__":
+    import nest_asyncio
+    nest_asyncio.apply()
     asyncio.run(main())
