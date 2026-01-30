@@ -6,8 +6,10 @@ from telegram.ext import (
     MessageHandler, ContextTypes, filters
 )
 from tradingview_ta import TA_Handler, Interval
+import nest_asyncio
 
-# ================= CONFIG =================
+nest_asyncio.apply()
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "6648308251"))
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@Mahmudsm1")
@@ -15,7 +17,6 @@ CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@Mahmudsm1")
 COINS = sorted([
     "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
     "ADAUSDT","DOGEUSDT","AVAXUSDT","MATICUSDT","DOTUSDT",
-    # Add more coins up to 100+ here...
 ])
 
 TIMEFRAMES = {
@@ -53,10 +54,10 @@ def build_signal(rec, price):
         return {
             "rec": "BUY",
             "entry": price,
-            "sl": price * 0.80,      # -20%
-            "tp1": price * 1.50,     # +50%
-            "tp2": price * 1.75,     # +75%
-            "tp3": price * 2.00      # +100%
+            "sl": price * 0.80,
+            "tp1": price * 1.50,
+            "tp2": price * 1.75,
+            "tp3": price * 2.00
         }
     else:
         return {
@@ -71,30 +72,20 @@ def build_signal(rec, price):
 def get_signal(symbol, exchange):
     for tf_name, tf in TIMEFRAMES.items():
         try:
-            handler = TA_Handler(
-                symbol=symbol,
-                screener="crypto",
-                exchange=exchange,
-                interval=tf
-            )
+            handler = TA_Handler(symbol=symbol, screener="crypto", exchange=exchange, interval=tf)
             analysis = handler.get_analysis()
             rec = analysis.summary["RECOMMENDATION"]
-
             if rec in ["STRONG_BUY", "STRONG_SELL"]:
                 price = float(analysis.indicators["close"])
                 sig = build_signal(rec, price)
-                sig.update({
-                    "symbol": symbol,
-                    "tf": tf_name,
-                    "exchange": exchange
-                })
+                sig.update({"symbol": symbol, "tf": tf_name, "exchange": exchange})
                 return sig
         except:
             continue
     return None
 
 def get_multi_exchange_signal(symbol):
-    for ex in ["BINANCE", "BYBIT"]:
+    for ex in ["BINANCE","BYBIT"]:
         sig = get_signal(symbol, ex)
         if sig:
             return sig
@@ -132,9 +123,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(user_id)
 
     if not await is_user_in_channel(context, user_id):
-        btn = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]
-        ])
+        btn = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]])
         await update.message.reply_text("Da fari ka shiga channel:", reply_markup=btn)
         return
 
@@ -143,24 +132,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if query.data.startswith("coin:"):
         symbol = query.data.split(":")[1]
         sig = get_multi_exchange_signal(symbol)
         if not sig:
             await query.edit_message_text(f"⚠️ Signal for {symbol} is not STRONG or unavailable.")
             return
-        msg = (
-            f"📊 SIGNAL {sig['symbol']} ({sig['tf']})\n"
-            f"📈 {sig['rec']} @ {sig['exchange']}\n"
-            f"🎯 Entry: {sig['entry']:.4f}\n"
-            f"🛑 SL: {sig['sl']:.4f}\n"
-            f"💰 TP1: {sig['tp1']:.4f}\n"
-            f"💰 TP2: {sig['tp2']:.4f}\n"
-            f"💰 TP3: {sig['tp3']:.4f}"
-        )
+        msg = f"📊 SIGNAL {sig['symbol']} ({sig['tf']})\n📈 {sig['rec']} @ {sig['exchange']}\n🎯 Entry: {sig['entry']:.4f}\n🛑 SL: {sig['sl']:.4f}\n💰 TP1: {sig['tp1']:.4f}\n💰 TP2: {sig['tp2']:.4f}\n💰 TP3: {sig['tp3']:.4f}"
         await query.edit_message_text(msg)
-
     elif query.data.startswith("page:"):
         page = int(query.data.split(":")[1])
         await query.edit_message_text("Select coin:", reply_markup=coins_keyboard(page))
@@ -178,15 +157,7 @@ async def search_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Signal ba STRONG ba ko babu.")
         return
 
-    msg = (
-        f"📊 SIGNAL {sig['symbol']} ({sig['tf']})\n"
-        f"📈 {sig['rec']} @ {sig['exchange']}\n"
-        f"🎯 Entry: {sig['entry']:.4f}\n"
-        f"🛑 SL: {sig['sl']:.4f}\n"
-        f"💰 TP1: {sig['tp1']:.4f}\n"
-        f"💰 TP2: {sig['tp2']:.4f}\n"
-        f"💰 TP3: {sig['tp3']:.4f}"
-    )
+    msg = f"📊 SIGNAL {sig['symbol']} ({sig['tf']})\n📈 {sig['rec']} @ {sig['exchange']}\n🎯 Entry: {sig['entry']:.4f}\n🛑 SL: {sig['sl']:.4f}\n💰 TP1: {sig['tp1']:.4f}\n💰 TP2: {sig['tp2']:.4f}\n💰 TP3: {sig['tp3']:.4f}"
     await update.message.reply_text(msg)
 
 # ================= ADMIN =================
@@ -219,12 +190,7 @@ async def auto_post(app):
             key = f"{coin}-{sig['tf']}-{sig['rec']}"
             if key in sent:
                 continue
-            msg = (
-                f"🚨 NEW SIGNAL\n"
-                f"{sig['symbol']} ({sig['tf']})\n"
-                f"{sig['rec']} @ {sig['exchange']}\n"
-                f"Entry: {sig['entry']:.4f}"
-            )
+            msg = f"🚨 NEW SIGNAL\n{sig['symbol']} ({sig['tf']})\n{sig['rec']} @ {sig['exchange']}\nEntry: {sig['entry']:.4f}"
             try:
                 await app.bot.send_message(CHANNEL_USERNAME, msg)
                 sent.add(key)
@@ -236,18 +202,17 @@ async def auto_post(app):
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(coin_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_coin))
     app.add_handler(CommandHandler("users", users_cmd))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
 
-    # Run auto_post in background
-    async def on_startup(app):
-        app.create_task(auto_post(app))
+    # Start auto_post in background
+    asyncio.create_task(auto_post(app))
 
-    await app.run_polling(post_init=on_startup)
+    # Run bot polling
+    await app.run_polling()
 
 if __name__ == "__main__":
     import nest_asyncio
