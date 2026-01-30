@@ -29,71 +29,48 @@ TIMEFRAMES = {
 USERS_FILE = "users.txt"
 
 # ================= HELPERS =================
+def load_users():
+    if not os.path.exists(USERS_FILE):
+        return []
+    with open(USERS_FILE) as f:
+        return [int(x) for x in f.read().splitlines() if x.isdigit()]
+
 def add_user(user_id):
     users = load_users()
     if user_id not in users:
         users.append(user_id)
         with open(USERS_FILE, "w") as f:
-            f.write("\n".join(str(u) for u in users))
+            f.write("\n".join(map(str, users)))
 
-def load_users():
-    if not os.path.exists(USERS_FILE):
-        return []
-    with open(USERS_FILE) as f:
-        return [int(x.strip()) for x in f if x.strip().isdigit()]
-
-async def is_user_in_channel(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+async def is_user_in_channel(context, user_id):
     try:
         member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ["member", "administrator", "creator"]
     except:
         return False
 
-def coins_keyboard(page=0, per_page=9):
-    start = page * per_page
-    end = start + per_page
-    chunk = COINS[start:end]
-
-    keyboard, row = [], []
-    for i, coin in enumerate(chunk, 1):
-        row.append(
-            InlineKeyboardButton(
-                coin.replace("USDT",""),
-                callback_data=f"coin:{coin}"
-            )
-        )
-        if i % 3 == 0:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-
-    return InlineKeyboardMarkup(keyboard)
-
 # ================= SIGNAL LOGIC =================
-def build_signal(price, rec, strength):
-    if rec == "BUY":
-        sl = price * 0.80
-        tp1 = price * 1.50
-        tp2 = price * 1.75
-        tp3 = price * 2.00
+def build_signal(rec, price):
+    if rec == "STRONG_BUY":
+        return {
+            "rec": "BUY",
+            "entry": price,
+            "sl": price * 0.80,      # -20%
+            "tp1": price * 1.50,     # +50%
+            "tp2": price * 1.75,     # +75%
+            "tp3": price * 2.00      # +100%
+        }
     else:
-        sl = price * 1.20
-        tp1 = price * 0.50
-        tp2 = price * 0.25
-        tp3 = price * 0.00
+        return {
+            "rec": "SELL",
+            "entry": price,
+            "sl": price * 1.20,
+            "tp1": price * 0.50,
+            "tp2": price * 0.25,
+            "tp3": price * 0.00
+        }
 
-    tps = []
-    if strength >= 1:
-        tps.append(("TP1", tp1))
-    if strength >= 2:
-        tps.append(("TP2", tp2))
-    if strength >= 3:
-        tps.append(("TP3", tp3))
-
-    return sl, tps
-
-def get_signal(symbol, exchange="BINANCE"):
+def get_signal(symbol, exchange):
     for tf_name, tf in TIMEFRAMES.items():
         try:
             handler = TA_Handler(
@@ -103,47 +80,27 @@ def get_signal(symbol, exchange="BINANCE"):
                 interval=tf
             )
             analysis = handler.get_analysis()
+            rec = analysis.summary["RECOMMENDATION"]
+
+            if rec in ["STRONG_BUY", "STRONG_SELL"]:
+                price = float(analysis.indicators["close"])
+                sig = build_signal(rec, price)
+                sig.update({
+                    "symbol": symbol,
+                    "tf": tf_name,
+                    "exchange": exchange
+                })
+                return sig
         except:
             continue
-
-        rec = analysis.summary.get("RECOMMENDATION")
-        if rec not in ["STRONG_BUY", "STRONG_SELL"]:
-            continue
-
-        osc = analysis.summary.get("OSCILLATORS", 0)
-        ma = analysis.summary.get("MOVING_AVERAGES", 0)
-        strength_score = abs(osc) + abs(ma)
-
-        if strength_score >= 20:
-            strength = 3
-        elif strength_score >= 14:
-            strength = 2
-        elif strength_score >= 8:
-            strength = 1
-        else:
-            return None
-
-        price = float(analysis.indicators["close"])
-        side = "BUY" if rec == "STRONG_BUY" else "SELL"
-
-        sl, tps = build_signal(price, side, strength)
-
-        return {
-            "symbol": symbol,
-            "tf": tf_name,
-            "side": side,
-            "entry": price,
-            "sl": sl,
-            "tps": tps,
-            "exchange": exchange
-        }
     return None
 
 def get_multi_exchange_signal(symbol):
-    sig = get_signal(symbol, "BINANCE")
-    if sig:
-        return sig
-    return get_signal(symbol, "BYBIT")
+    for ex in ["BINANCE", "BYBIT"]:
+        sig = get_signal(symbol, ex)
+        if sig:
+            return sig
+    return None
 
 # ================= COMMANDS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -151,46 +108,77 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(user_id)
 
     if not await is_user_in_channel(context, user_id):
-        await update.message.reply_text(
-            f"Join {CHANNEL_USERNAME} first"
-        )
+        btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]
+        ])
+        await update.message.reply_text("Da fari ka shiga channel:", reply_markup=btn)
         return
 
-    await update.message.reply_text(
-        "Select coin:",
-        reply_markup=coins_keyboard()
-    )
+    await update.message.reply_text("Rubuta coin (BTC ko ETHUSDT):")
 
-async def coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+async def search_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.upper().strip()
 
-    symbol = q.data.split(":")[1]
-    sig = get_multi_exchange_signal(symbol)
+    if len(text) < 3:
+        return
+
+    if not text.endswith("USDT"):
+        text += "USDT"
+
+    sig = get_multi_exchange_signal(text)
 
     if not sig:
-        await q.edit_message_text("⚠️ Signal ba STRONG ba.")
+        await update.message.reply_text("⚠️ Signal ba STRONG ba ko babu.")
         return
 
-    tp_text = "\n".join([f"🎯 {n}: {v:.4f}" for n, v in sig["tps"]])
+    msg = (
+        f"📊 SIGNAL {sig['symbol']} ({sig['tf']})\n"
+        f"📈 {sig['rec']} @ {sig['exchange']}\n\n"
+        f"🎯 Entry: {sig['entry']:.4f}\n"
+        f"🛑 SL: {sig['sl']:.4f}\n"
+        f"💰 TP1: {sig['tp1']:.4f}\n"
+        f"💰 TP2: {sig['tp2']:.4f}\n"
+        f"💰 TP3: {sig['tp3']:.4f}"
+    )
 
-    msg = f"""
-📊 {sig['symbol']} ({sig['tf']}) {sig['exchange']}
-📈 {sig['side']}
-🎯 Entry: {sig['entry']:.4f}
-🛑 SL: {sig['sl']:.4f}
+    await update.message.reply_text(msg)
 
-{tp_text}
-"""
-    await q.edit_message_text(msg)
+# ================= AUTO POST (NO TIME LIMIT) =================
+async def auto_post(app):
+    sent = set()
+    while True:
+        for coin in COINS:
+            sig = get_multi_exchange_signal(coin)
+            if not sig:
+                continue
+
+            key = f"{coin}-{sig['tf']}-{sig['rec']}"
+            if key in sent:
+                continue
+
+            msg = (
+                f"🚨 NEW SIGNAL\n"
+                f"{sig['symbol']} ({sig['tf']})\n"
+                f"{sig['rec']} @ {sig['exchange']}\n"
+                f"Entry: {sig['entry']:.4f}"
+            )
+
+            try:
+                await app.bot.send_message(CHANNEL_USERNAME, msg)
+                sent.add(key)
+            except:
+                pass
+
+        await asyncio.sleep(300)  # duk minti 5
 
 # ================= MAIN =================
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(coin_callback, pattern="coin:"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_coin))
 
+    asyncio.create_task(auto_post(app))
     await app.run_polling()
 
 if __name__ == "__main__":
