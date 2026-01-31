@@ -1,235 +1,187 @@
 import os
 import asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ContextTypes, filters
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
 )
-from tradingview_ta import TA_Handler, Interval
-import nest_asyncio
-
-nest_asyncio.apply()
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    CallbackQueryHandler
+)
+from tradingview_ta import TA_Handler, Interval, Exchange
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "6648308251"))
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@Mahmudsm1")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # verified channel
 
-# Whitelist coins (100+)
-COINS = sorted([
-    "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT","DOGEUSDT",
-    "AVAXUSDT","MATICUSDT","DOTUSDT","LTCUSDT","LINKUSDT","UNIUSDT","ATOMUSDT",
-    "ALGOUSDT","VETUSDT","XLMUSDT","TRXUSDT","FILUSDT","ICPUSDT","SANDUSDT",
-    "AAVEUSDT","NEOUSDT","MKRUSDT","EOSUSDT","CHZUSDT","KNCUSDT","BATUSDT",
-    "COMPUSDT","ZRXUSDT","SNXUSDT","ENJUSDT","GRTUSDT","1INCHUSDT","AVAXUSDT",
-    "FTMUSDT","CRVUSDT","MANAUSDT","YFIUSDT","ANKRUSDT","CELOUSDT","ARUSDT",
-    "QNTUSDT","MINAUSDT","DYDXUSDT","LRCUSDT","KAVAUSDT","RUNEUSDT","EGLDUSDT",
-    "FLOWUSDT","CHSBUSDT","STMXUSDT","HOTUSDT","SXPUSDT","ZILUSDT","ONEUSDT",
-    "ROSEUSDT","HNTUSDT","OCEANUSDT","KSMUSDT","ZENUSDT","SRMUSDT","GLMRUSDT",
-    "GALAUSDT","ENSUSDT","LUNA2USDT","MOVRUSDT","IMXUSDT","APTUSDT","ARBUSDT",
-    "OPUSDT","BNXUSDT","AGIXUSDT","PEOPLEUSDT","RNDRUSDT","DYDXUSDT","SUIUSDT",
-    "CFXUSDT","KLAYUSDT","METISUSDT","GMXUSDT","FLUXUSDT","FXSUSDT","SPELLUSDT",
-    "TRUUSDT","BTRSTUSDT","GODSUSDT","HIGHUSDT","HOOKUSDT","CVXUSDT","VELOUSDT",
-    "PHAUSDT","CTSIUSDT","MASKUSDT","API3USDT","LOOKSUSDT","RAYUSDT","ALCXUSDT",
-    "AGLDUSDT","FETUSDT","ANTUSDT","LPTUSDT","ACHUSDT","XEMUSDT","ZRXUSDT",
-    "RLCUSDT","IOSTUSDT","ARPAUSDT","CTKUSDT","ORNUSDT","API3USDT","TRIBEUSDT",
-    "SUPERUSDT","POLYUSDT","FRONTUSDT","REPUSDT","ALPHAUSDT","STORJUSDT","AKROUSDT",
-    "REEFUSDT","MLNUSDT","FORTHUSDT","PROMUSDT","MIRUSDT","PERPUSDT","JSTUSDT"
-])
+ALLOWED_SIGNALS = [
+    "STRONG_BUY",
+    "BUY",
+    "SELL",
+    "STRONG_SELL"
+]
 
-TIMEFRAMES = {
-    "1H": Interval.INTERVAL_1_HOUR,
-    "4H": Interval.INTERVAL_4_HOURS,
-    "1D": Interval.INTERVAL_1_DAY
-}
+SL = "-20%"
+TP1 = "+50%"
+TP2 = "+75%"
+TP3 = "+100%"
 
-USERS_FILE = "users.txt"
-COINS_PER_PAGE = 12
+COINS_FILE = "coins.txt"
+INTERVAL = Interval.INTERVAL_1_HOUR
 
-# ================= HELPERS =================
-def load_users():
-    if not os.path.exists(USERS_FILE):
-        return []
-    with open(USERS_FILE) as f:
-        return [int(x) for x in f.read().splitlines() if x.isdigit()]
+# ================= DATA =================
+USERS = set()
+AUTO_SIGNAL_RUNNING = False
+COINS = []
 
-def add_user(user_id):
-    users = load_users()
-    if user_id not in users:
-        users.append(user_id)
-        with open(USERS_FILE, "w") as f:
-            f.write("\n".join(map(str, users)))
+# ================= LOAD COINS =================
+def load_coins():
+    global COINS
+    if os.path.exists(COINS_FILE):
+        with open(COINS_FILE, "r") as f:
+            COINS = [c.strip().upper() for c in f if c.strip()]
 
-async def is_user_in_channel(context, user_id):
-    try:
-        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except:
-        return False
+# ================= TRADINGVIEW ANALYSIS =================
+def analyze_coin(symbol: str):
+    handler = TA_Handler(
+        symbol=symbol,
+        screener="crypto",
+        exchange=Exchange.BINANCE,
+        interval=INTERVAL
+    )
+    analysis = handler.get_analysis()
+    return analysis.summary["RECOMMENDATION"], analysis.indicators["close"]
 
-# ================= SIGNAL LOGIC =================
-def build_signal(rec, price):
-    if rec == "STRONG_BUY":
-        return {
-            "rec": "BUY",
-            "entry": price,
-            "sl": price * 0.80,
-            "tp1": price * 1.50,
-            "tp2": price * 1.75,
-            "tp3": price * 2.00
-        }
-    else:
-        return {
-            "rec": "SELL",
-            "entry": price,
-            "sl": price * 1.20,
-            "tp1": price * 0.50,
-            "tp2": price * 0.25,
-            "tp3": price * 0.00
-        }
+# ================= SIGNAL FORMAT =================
+def format_signal(symbol, direction, price):
+    return f"""
+🚨 NEW SIGNAL
+{symbol} (1H)
+{direction} @ BINANCE
 
-def get_signal(symbol, exchange):
-    for tf_name, tf in TIMEFRAMES.items():
+Entry: {price}
+
+SL: {SL}
+TP1: {TP1}
+TP2: {TP2}
+TP3: {TP3}
+"""
+
+# ================= COMMANDS =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    USERS.add(update.effective_user.id)
+    await update.message.reply_text("✅ Bot yana aiki.")
+
+async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await update.message.reply_text(f"👥 Users: {len(USERS)}")
+
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    text = " ".join(context.args)
+    for uid in USERS:
         try:
-            handler = TA_Handler(symbol=symbol, screener="crypto", exchange=exchange, interval=tf)
-            analysis = handler.get_analysis()
-            rec = analysis.summary["RECOMMENDATION"]
-
-            if rec in ["STRONG_BUY", "STRONG_SELL"]:
-                price = float(analysis.indicators["close"])
-                sig = build_signal(rec, price)
-                sig.update({
-                    "symbol": symbol,
-                    "tf": tf_name,
-                    "exchange": exchange
-                })
-                return sig
+            await context.bot.send_message(uid, text)
         except:
-            continue
-    return None
-
-def get_multi_exchange_signal(symbol):
-    for ex in ["BINANCE", "BYBIT"]:
-        sig = get_signal(symbol, ex)
-        if sig:
-            return sig
-    return None
+            pass
 
 # ================= COINS BUTTON =================
-def build_coins_keyboard(page=0):
-    start = page * COINS_PER_PAGE
-    end = start + COINS_PER_PAGE
-    keyboard = [
-        [InlineKeyboardButton(coin, callback_data=f"coin_{coin}")]
-        for coin in COINS[start:end]
+PAGE_SIZE = 10
+
+def coins_keyboard(page=0):
+    start = page * PAGE_SIZE
+    end = start + PAGE_SIZE
+    buttons = [
+        [InlineKeyboardButton(c, callback_data=f"coin_{c}")]
+        for c in COINS[start:end]
     ]
+
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"page_{page-1}"))
+        nav.append(InlineKeyboardButton("⬅ Prev", callback_data=f"page_{page-1}"))
     if end < len(COINS):
-        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"page_{page+1}"))
+        nav.append(InlineKeyboardButton("Next ➡", callback_data=f"page_{page+1}"))
+
     if nav:
-        keyboard.append(nav)
-    return InlineKeyboardMarkup(keyboard)
+        buttons.append(nav)
+
+    return InlineKeyboardMarkup(buttons)
+
+async def coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🪙 Coins whitelist:",
+        reply_markup=coins_keyboard(0)
+    )
 
 async def coins_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
     data = query.data
 
-    if data.startswith("coin_"):
-        coin = data.split("_")[1]
-        sig = get_multi_exchange_signal(coin)
-        if not sig:
-            await query.message.edit_text(f"⚠️ Signal ba STRONG ba ko babu.")
-            return
-        msg = (
-            f"📊 SIGNAL {sig['symbol']} ({sig['tf']})\n"
-            f"📈 {sig['rec']} @ {sig['exchange']}\n\n"
-            f"🎯 Entry: {sig['entry']:.4f}\n"
-            f"🛑 SL: {sig['sl']:.4f}\n"
-            f"💰 TP1: {sig['tp1']:.4f}\n"
-            f"💰 TP2: {sig['tp2']:.4f}\n"
-            f"💰 TP3: {sig['tp3']:.4f}"
-        )
-        await query.message.edit_text(msg)
-    elif data.startswith("page_"):
+    if data.startswith("page_"):
         page = int(data.split("_")[1])
-        await query.message.edit_text("Select coin:", reply_markup=build_coins_keyboard(page))
+        await query.edit_message_reply_markup(
+            reply_markup=coins_keyboard(page)
+        )
 
-# ================= SEARCH COIN =================
-async def search_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.upper().strip()
-    if len(text) < 3:
-        return
-    if not text.endswith("USDT"):
-        text += "USDT"
-    sig = get_multi_exchange_signal(text)
-    if not sig:
-        await update.message.reply_text("⚠️ Signal ba STRONG ba ko babu.")
-        return
-    msg = (
-        f"📊 SIGNAL {sig['symbol']} ({sig['tf']})\n"
-        f"📈 {sig['rec']} @ {sig['exchange']}\n\n"
-        f"🎯 Entry: {sig['entry']:.4f}\n"
-        f"🛑 SL: {sig['sl']:.4f}\n"
-        f"💰 TP1: {sig['tp1']:.4f}\n"
-        f"💰 TP2: {sig['tp2']:.4f}\n"
-        f"💰 TP3: {sig['tp3']:.4f}"
-    )
-    await update.message.reply_text(msg)
+    elif data.startswith("coin_"):
+        symbol = data.replace("coin_", "")
+        try:
+            result, price = analyze_coin(symbol)
+            if result not in ALLOWED_SIGNALS:
+                await query.message.reply_text("⚠️ Signal ba STRONG ba ko NEUTRAL.")
+                return
 
-# ================= START COMMAND =================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    add_user(user_id)
+            direction = "BUY" if "BUY" in result else "SELL"
+            msg = format_signal(symbol, direction, price)
+            await query.message.reply_text(msg)
 
-    if not await is_user_in_channel(context, user_id):
-        btn = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]
-        ])
-        await update.message.reply_text("Da fari ka shiga channel:", reply_markup=btn)
-        return
+        except Exception as e:
+            await query.message.reply_text("❌ Error yayin analysis.")
 
-    await update.message.reply_text("Rubuta coin (BTC ko ETHUSDT) ko danna button:", reply_markup=build_coins_keyboard())
+# ================= AUTO SIGNAL =================
+async def auto_signal_loop(app):
+    global AUTO_SIGNAL_RUNNING
+    AUTO_SIGNAL_RUNNING = True
 
-# ================= AUTO POST =================
-async def auto_post(app):
-    sent = set()
-    while True:
-        for coin in COINS:
-            sig = get_multi_exchange_signal(coin)
-            if not sig:
-                continue
-            key = f"{coin}-{sig['tf']}-{sig['rec']}"
-            if key in sent:
-                continue
-            msg = (
-                f"🚨 NEW SIGNAL\n"
-                f"{sig['symbol']} ({sig['tf']})\n"
-                f"{sig['rec']} @ {sig['exchange']}\n"
-                f"Entry: {sig['entry']:.4f}"
-            )
+    while AUTO_SIGNAL_RUNNING:
+        for symbol in COINS:
             try:
-                await app.bot.send_message(CHANNEL_USERNAME, msg)
-                sent.add(key)
+                result, price = analyze_coin(symbol)
+                if result not in ALLOWED_SIGNALS:
+                    continue
+
+                direction = "BUY" if "BUY" in result else "SELL"
+                msg = format_signal(symbol, direction, price)
+
+                await app.bot.send_message(CHANNEL_ID, msg)
+                await asyncio.sleep(5)
+
             except:
-                pass
-        await asyncio.sleep(300)  # duk minti 5
+                continue
+
+        await asyncio.sleep(60)
 
 # ================= MAIN =================
 async def main():
+    load_coins()
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_coin))
+    app.add_handler(CommandHandler("users", users))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CommandHandler("coins", coins))
     app.add_handler(CallbackQueryHandler(coins_callback))
 
-    # Auto-post background task
-    asyncio.create_task(auto_post(app))
-
-    # Run bot
+    asyncio.create_task(auto_signal_loop(app))
     await app.run_polling()
 
 if __name__ == "__main__":
