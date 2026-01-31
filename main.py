@@ -1,92 +1,111 @@
 import os
-import asyncio
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext, MessageHandler, Filters
+from tradingview_ta import TA_Handler, Interval
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "123456789"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 CHANNEL_USERNAME = "@Mahmudsm1"
-COIN_WHITELIST_FILE = "coins.txt"
 
 TP1_PERCENT = 50
 TP2_PERCENT = 75
 TP3_PERCENT = 100
 SL_PERCENT = 20
 
-# Load coin whitelist
-with open(COIN_WHITELIST_FILE, "r") as f:
-    COIN_WHITELIST = [line.strip().upper() for line in f.readlines()]
+COIN_FILE = "coins.txt"
 
-# ================= HELPERS =================
-async def check_channel_join(update: Update) -> bool:
+# ================ LOGGING =================
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# ================ HELPERS =================
+def load_coins():
+    with open(COIN_FILE, "r") as f:
+        return [line.strip().upper() for line in f if line.strip()]
+
+COINS = load_coins()
+
+def join_channel_check(update: Update):
     try:
-        member = await update.effective_chat.get_member(CHANNEL_USERNAME)
-        return member.status not in ["left", "kicked"]
+        member = update.effective_chat.get_member(update.effective_user.id)
+        return True
     except:
         return False
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    joined = await check_channel_join(update)
-    if not joined:
-        keyboard = [[InlineKeyboardButton("Join channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")]]
-        await update.message.reply_text("Join channel first:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-
-    keyboard = [
-        [InlineKeyboardButton("Search Coin 🔍", callback_data="search_coin")],
-        [InlineKeyboardButton("My Signals 🔔", callback_data="my_signals")]
-    ]
-    await update.message.reply_text("Welcome! Choose an option:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("Unauthorized")
+# ================ COMMANDS =================
+def start(update: Update, context: CallbackContext):
+    if not join_channel_check(update):
+        keyboard = [[InlineKeyboardButton("Join Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")]]
+        update.message.reply_text("Join our channel first!", reply_markup=InlineKeyboardMarkup(keyboard))
         return
     keyboard = [
-        [InlineKeyboardButton("Broadcast Message", callback_data="broadcast")],
-        [InlineKeyboardButton("Users List", callback_data="users")],
+        [InlineKeyboardButton("Search Coin", callback_data="search_coin")],
+        [InlineKeyboardButton("Admin Dashboard", callback_data="admin_dashboard")]
     ]
-    await update.message.reply_text("Admin Dashboard:", reply_markup=InlineKeyboardMarkup(keyboard))
+    update.message.reply_text("Welcome! Choose an option:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def button(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
-    if query.data == "search_coin":
-        await query.edit_message_text("Send me the coin symbol to search:")
-    elif query.data == "my_signals":
-        await query.edit_message_text("Your active signals will appear here.")
-    elif query.data == "broadcast":
-        await query.edit_message_text("Send the broadcast message:")
-    elif query.data == "users":
-        await query.edit_message_text("List of users (placeholder)")
+    query.answer()
+    data = query.data
 
-async def signal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message.text.upper()
-    if msg not in COIN_WHITELIST:
-        await update.message.reply_text("Coin not in whitelist.")
-        return
-    # Simulated signal
-    tp_hit = TP1_PERCENT  # Example: you can compute real signal % here
-    sl_hit = SL_PERCENT
-    keyboard = [[InlineKeyboardButton("View Signal", callback_data="my_signals")]]
-    await update.message.reply_text(f"Signal received!\nTP1: +{TP1_PERCENT}%\nTP2: +{TP2_PERCENT}%\nTP3: +{TP3_PERCENT}%\nSL: -{SL_PERCENT}%", reply_markup=InlineKeyboardMarkup(keyboard))
+    if data == "search_coin":
+        query.edit_message_text("Send coin symbol (e.g., BTCUSDT):")
+        context.user_data["awaiting_coin"] = True
 
-# ================= MAIN =================
-async def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    elif data == "admin_dashboard" and update.effective_user.id == ADMIN_ID:
+        keyboard = [
+            [InlineKeyboardButton("View Coins", callback_data="view_coins")],
+            [InlineKeyboardButton("Reload Coins", callback_data="reload_coins")]
+        ]
+        query.edit_message_text("Admin Dashboard:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("admin", admin))
-    app.add_handler(CallbackQueryHandler(button_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, signal_handler))
+    elif data == "view_coins":
+        query.edit_message_text("Coins whitelist:\n" + "\n".join(COINS))
 
-    print("Bot started...")
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    # Keep running
-    await asyncio.Event().wait()
+    elif data == "reload_coins":
+        global COINS
+        COINS = load_coins()
+        query.edit_message_text("Coins reloaded!")
+
+def handle_message(update: Update, context: CallbackContext):
+    if context.user_data.get("awaiting_coin"):
+        coin = update.message.text.upper()
+        context.user_data["awaiting_coin"] = False
+        if coin not in COINS:
+            update.message.reply_text(f"{coin} is not in the whitelist.")
+            return
+        try:
+            handler = TA_Handler(
+                symbol=coin,
+                screener="CRYPTO",
+                exchange="BINANCE",
+                interval=Interval.INTERVAL_1_DAY
+            )
+            analysis = handler.get_analysis().summary
+            signal_text = f"{coin} Signal:\nBuy: {analysis['BUY']}\nSell: {analysis['SELL']}\nNeutral: {analysis['NEUTRAL']}"
+            signal_text += f"\n\nTP1: +{TP1_PERCENT}%\nTP2: +{TP2_PERCENT}%\nTP3: +{TP3_PERCENT}%\nSL: -{SL_PERCENT}%"
+            update.message.reply_text(signal_text)
+        except Exception as e:
+            update.message.reply_text(f"Error fetching signal: {e}")
+
+# ================ MAIN =================
+def main():
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CallbackQueryHandler(button))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+
+    updater.start_polling()
+    logger.info("Bot started...")
+    updater.idle()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
