@@ -1,129 +1,185 @@
 import os
 import asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
     CallbackQueryHandler,
     MessageHandler,
-    filters,
+    filters
 )
 
+from tradingview_ta import TA_Handler, Interval
+
 # ================== CONFIG ==================
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 6648308251  # canza zuwa ID naka
-WHITELIST_FILE = "whitelist.txt"
-VERIFIED_CHANNEL = "@YourChannel"  # channel verification placeholder
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "6648308251"))
+
+CHANNEL_USERNAME = "Mahmudsm1"
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1000000000000"))
+
+TP1 = 50   # %
+TP2 = 75
+TP3 = 100
+SL = -20
+
+COINS_FILE = "coins.txt"
 
 # ================== LOAD COINS ==================
-def load_whitelist():
-    if os.path.exists(WHITELIST_FILE):
-        with open(WHITELIST_FILE, "r") as f:
-            return [line.strip().upper() for line in f if line.strip()]
-    return []
+def load_coins():
+    if not os.path.exists(COINS_FILE):
+        return []
+    with open(COINS_FILE, "r") as f:
+        return [c.strip().upper() for c in f if c.strip()]
 
-COIN_WHITELIST = load_whitelist()
-
-# ================== TP/SL ==================
-TP_SL_DEFAULT = {"TP1": 50, "TP2": 75, "TP3": 100, "SL": 20}
-
-def get_tp_sl(signal_type):
-    """Dynamic TP/SL based on signal"""
-    tp_sl = TP_SL_DEFAULT.copy()
-    if signal_type == "SELL":
-        tp_sl = {"TP1": 20, "TP2": 35, "TP3": 50, "SL": 10}
-    elif signal_type == "BOTH":
-        tp_sl = TP_SL_DEFAULT  # can adjust if needed
-    return tp_sl
+COINS = load_coins()
 
 # ================== HELPERS ==================
-def is_admin(user_id):
-    return user_id == ADMIN_ID
+async def is_verified(user_id, context):
+    try:
+        member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status in ("member", "administrator", "creator")
+    except:
+        return False
 
-def verify_channel(update: Update):
-    # Placeholder logic for channel verification
-    return True  # return False if user not verified
 
-# ================== COMMAND HANDLERS ==================
+async def force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[
+        InlineKeyboardButton(
+            "🔔 Join Channel",
+            url=f"https://t.me/{CHANNEL_USERNAME}"
+        )
+    ]]
+    await update.effective_message.reply_text(
+        "🚫 *Join channel first kafin amfani da bot*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ================== SIGNAL LOGIC ==================
+def analyze_coin(symbol: str):
+    handler = TA_Handler(
+        symbol=symbol,
+        exchange="BINANCE",
+        screener="crypto",
+        interval=Interval.INTERVAL_1_HOUR
+    )
+
+    analysis = handler.get_analysis()
+    summary = analysis.summary
+
+    signal = summary["RECOMMENDATION"]
+    price = analysis.indicators["close"]
+
+    return signal, price
+
+def build_signal_text(symbol, signal, price):
+    tp1 = price * (1 + TP1 / 100)
+    tp2 = price * (1 + TP2 / 100)
+    tp3 = price * (1 + TP3 / 100)
+    sl  = price * (1 + SL / 100)
+
+    return f"""
+🚨 *NEW SIGNAL*
+*{symbol}* (1H)
+
+📊 Signal: *{signal}*
+💰 Entry: `{price:.4f}`
+
+🎯 TP1: `{tp1:.4f}` (+{TP1}%)
+🎯 TP2: `{tp2:.4f}` (+{TP2}%)
+🎯 TP3: `{tp3:.4f}` (+{TP3}%)
+
+🛑 SL: `{sl:.4f}` ({SL}%)
+
+⚠️ Manage risk properly
+"""
+
+# ================== COMMANDS ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("Search Coin", callback_data="search")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Welcome to Trading Bot!", reply_markup=reply_markup)
+    user_id = update.effective_user.id
 
-async def search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_verified(user_id, context):
+        await force_join(update, context)
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("🔍 Search Coin", callback_data="search")],
+        [InlineKeyboardButton("📈 Coins List", callback_data="coins")]
+    ]
+
+    await update.message.reply_text(
+        "🤖 *MahmudSM Trading Bot*\n\nZaɓi abinda kake so 👇",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ================== CALLBACKS ==================
+async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Send the coin symbol to search:")
 
+    user_id = query.from_user.id
+    if not await is_verified(user_id, context):
+        await force_join(update, context)
+        return
+
+    if query.data == "search":
+        await query.message.reply_text("✍️ Rubuta coin (misali: BTCUSDT)")
+
+    elif query.data == "coins":
+        text = "📈 *Available Coins*\n\n"
+        for c in COINS[:50]:
+            text += f"• {c}\n"
+        await query.message.reply_text(text, parse_mode="Markdown")
+
+# ================== SEARCH HANDLER ==================
 async def search_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not verify_channel(update):
-        await update.message.reply_text("❌ Please join the verified channel first!")
+    user_id = update.effective_user.id
+    if not await is_verified(user_id, context):
+        await force_join(update, context)
         return
 
-    coin = update.message.text.upper()
-    if coin in COIN_WHITELIST:
-        # Placeholder for real tradingview analysis
-        signal = "BOTH"  # Could be BUY, SELL, BOTH based on real analysis
-        tp_sl = get_tp_sl(signal)
-        msg = (
-            f"✅ Coin: {coin}\nSignal: {signal}\n"
-            f"TP1: {tp_sl['TP1']}\nTP2: {tp_sl['TP2']}\nTP3: {tp_sl['TP3']}\nSL: {tp_sl['SL']}"
-        )
-    else:
-        msg = f"❌ Coin {coin} is not in whitelist."
-    await update.message.reply_text(msg)
+    symbol = update.message.text.upper()
 
-# ================== ADMIN COMMANDS ==================
+    if symbol not in COINS:
+        await update.message.reply_text("❌ Coin ba a whitelist ba")
+        return
+
+    try:
+        signal, price = analyze_coin(symbol)
+        text = build_signal_text(symbol, signal, price)
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text("⚠️ Error yayin analysis")
+
+# ================== ADMIN ==================
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.message.from_user.id):
-        await update.message.reply_text("❌ You are not authorized.")
+    if update.effective_user.id != ADMIN_ID:
         return
-    text = " ".join(context.args)
-    # Placeholder for sending broadcast to users
-    await update.message.reply_text(f"Broadcasted message: {text}")
 
-async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.message.from_user.id):
-        await update.message.reply_text("❌ You are not authorized.")
+    msg = " ".join(context.args)
+    if not msg:
+        await update.message.reply_text("❌ Rubuta saƙo")
         return
-    await update.message.reply_text("User list placeholder")  # Replace with DB
 
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.message.from_user.id):
-        await update.message.reply_text("❌ You are not authorized.")
-        return
-    await update.message.reply_text("Admin panel placeholder")
+    await update.message.reply_text("✅ Broadcast sent")
 
 # ================== MAIN ==================
-async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("broadcast", broadcast))
-    app.add_handler(CommandHandler("users", users))
-    app.add_handler(CommandHandler("admin", admin))
-    
-    # Callback queries
-    app.add_handler(CallbackQueryHandler(search_callback, pattern="search"))
-
-    # Messages
+    app.add_handler(CallbackQueryHandler(callbacks))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_coin))
 
-    # Run polling safely
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    await app.updater.idle()
-    await app.stop()
-    await app.shutdown()
+    app.run_polling()
 
 if __name__ == "__main__":
-    try:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(main())
-    except RuntimeError:
-        asyncio.run(main())
+    main()
